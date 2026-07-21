@@ -1235,6 +1235,22 @@ namespace bmt
             return lhs.sourcePath < rhs.sourcePath;
         };
 
+        auto relationPeer = [&](size_t index) -> std::optional<size_t>
+        {
+            const auto& pack = flat[index];
+            const uint32_t peerID = pack.extID ? pack.extID : pack.baseID;
+            const auto candidates = byOriginalID.find(peerID);
+            if (!peerID || candidates == byOriginalID.end())
+                return std::nullopt;
+            for (const size_t candidate : candidates->second)
+            {
+                if (flat[candidate].dlcType == pack.dlcType &&
+                    flat[candidate].dlcOrder == pack.dlcOrder)
+                    return candidate;
+            }
+            return std::nullopt;
+        };
+
         std::vector<bool> active(flat.size(), true);
         for (auto& [id, indices] : byOriginalID)
         {
@@ -1250,6 +1266,11 @@ namespace bmt
                         (!winner.extID || !duplicate.extID || winner.extID == duplicate.extID) &&
                         (!winner.baseID || !duplicate.baseID || winner.baseID == duplicate.baseID);
                     if (!compatibleRelations || !SamePackContent(winner, duplicate))
+                        continue;
+                    const auto winnerPeer = relationPeer(earlier);
+                    const auto duplicatePeer = relationPeer(candidate);
+                    if (winnerPeer && duplicatePeer &&
+                        !SamePackContent(flat[*winnerPeer], flat[*duplicatePeer]))
                         continue;
                     if (!winner.extID)
                         winner.extID = duplicate.extID;

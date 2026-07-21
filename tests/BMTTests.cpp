@@ -112,6 +112,26 @@ int main()
     assert(paired.packs.at(600000000).front().extID == 600000001);
     assert(paired.packs.at(600000001).front().baseID == 600000000);
 
+    bmt::LoadResult mixedPair;
+    bmt::MusicPack mixedOfficialBase = baseOne;
+    mixedOfficialBase.dlcType = bmt::DLCType::Official;
+    bmt::MusicPack mixedHotBase = baseTwo;
+    mixedHotBase.dlcType = bmt::DLCType::JBHot;
+    mixedHotBase.customFirstID = mixedHotBase.customLastID = 0;
+    bmt::MusicPack mixedOfficialExtension = extOne;
+    mixedOfficialExtension.dlcType = bmt::DLCType::Official;
+    bmt::MusicPack mixedHotExtension = extTwo;
+    mixedHotExtension.dlcType = bmt::DLCType::JBHot;
+    mixedHotExtension.customFirstID = mixedHotExtension.customLastID = 0;
+    SetContent(mixedHotExtension, {3});
+    mixedPair.packs[100] = {mixedOfficialBase, mixedHotBase};
+    mixedPair.packs[200] = {mixedOfficialExtension, mixedHotExtension};
+    const auto mixedRemaps = bmt::ResolveConflicts(mixedPair, {600000000, 600000010});
+    assert(mixedRemaps.size() == 2);
+    assert(mixedPair.droppedDuplicates == 0);
+    assert(mixedPair.packs.at(600000000).front().extID == 600000001);
+    assert(mixedPair.packs.at(600000001).front().baseID == 600000000);
+
     bmt::LoadResult identical;
     bmt::MusicPack identicalOfficial = first;
     bmt::MusicPack identicalHot = first;
