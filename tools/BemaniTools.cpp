@@ -7,6 +7,8 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -28,15 +30,17 @@ namespace
         std::cerr
             << "Usage:\n"
             << "  BemaniTools mulist-decrypt <mulist> <keychain-plist> <output-plist>\n"
-            << "  BemaniTools load [options] <jbt-or-directory>...\n\n"
+            << "  BemaniTools load [options]\n\n"
             << "load options:\n"
             << "  --eager                    materialize every resource\n"
             << "  --strict                   stop on the first invalid pack\n"
-            << "  --jbhot-plist <path>       JBHot NSUserDefaults plist\n"
-            << "  --music-json <path>        decrypted JBHot musicData JSON\n"
-            << "  --server-data <path>       decrypted JBHot serverData JSON\n"
+            << "  --official <directory>     Official DLC directory (once)\n"
+            << "  --jbhot <directory>        JBHot DLC directory (once)\n"
+            << "  --jbhot-plist=<path>       encrypted JBHot NSUserDefaults plist\n"
+            << "  --custom-dir=<directory>   Custom DLC directory (repeatable)\n"
+            << "  --custom-range=<first>,<last>  range for preceding Custom DLC\n"
             << "  --catalog <path>           official plaintext mulist plist\n"
-            << "  --resolve <first> <last>   resolve duplicate IDs in this range\n"
+            << "  --resolve <first> <last>   JBHot conflict ID range\n"
             << "  --export <directory>       write JBTs, mulist.plist, and playlists.plist\n";
     }
 
@@ -47,6 +51,16 @@ namespace
         if (text[consumed] != '\0' || value > std::numeric_limits<uint32_t>::max())
             throw std::runtime_error(std::string("invalid ID: ") + text);
         return static_cast<uint32_t>(value);
+    }
+
+    std::pair<uint32_t, uint32_t> ParseRange(std::string_view text)
+    {
+        const auto comma = text.find(',');
+        if (comma == std::string_view::npos || text.find(',', comma + 1) != std::string_view::npos)
+            throw std::runtime_error("Custom range must be <first>,<last>");
+        const std::string first(text.substr(0, comma));
+        const std::string last(text.substr(comma + 1));
+        return {ParseID(first.c_str()), ParseID(last.c_str())};
     }
 }
 
@@ -82,7 +96,9 @@ int main(int argc, char** argv)
         bmt::ResolveOptions resolveOptions;
         bool resolve = false;
         std::optional<fs::path> exportDirectory;
-        std::vector<fs::path> inputs;
+        std::optional<fs::path> officialDirectory;
+        std::optional<fs::path> jbhotDirectory;
+        std::vector<bmt::DLCSource> customSources;
         for (int index = 2; index < argc; ++index)
         {
             const std::string argument = argv[index];
@@ -94,9 +110,35 @@ int main(int argc, char** argv)
             };
             if (argument == "--eager") options.mode = bmt::LoadMode::Eager;
             else if (argument == "--strict") options.failureMode = bmt::FailureMode::Strict;
+            else if (argument == "--official")
+            {
+                if (officialDirectory)
+                    throw std::runtime_error("--official may only be specified once");
+                officialDirectory = requireValue();
+            }
+            else if (argument == "--jbhot")
+            {
+                if (jbhotDirectory)
+                    throw std::runtime_error("--jbhot may only be specified once");
+                jbhotDirectory = requireValue();
+            }
+            else if (argument.starts_with("--jbhot-plist="))
+                options.jbhotDefaultsPlist = argument.substr(14);
             else if (argument == "--jbhot-plist") options.jbhotDefaultsPlist = requireValue();
-            else if (argument == "--music-json") options.musicDataJson = requireValue();
-            else if (argument == "--server-data") options.serverDataJson = requireValue();
+            else if (argument.starts_with("--custom-dir="))
+            {
+                if (!customSources.empty() && !customSources.back().firstID)
+                    throw std::runtime_error("the preceding --custom-dir has no --custom-range");
+                customSources.push_back({bmt::DLCType::Custom, argument.substr(13), 0, 0});
+            }
+            else if (argument.starts_with("--custom-range="))
+            {
+                if (customSources.empty() || customSources.back().firstID)
+                    throw std::runtime_error("--custom-range must follow one --custom-dir");
+                const auto [first, last] = ParseRange(std::string_view(argument).substr(15));
+                customSources.back().firstID = first;
+                customSources.back().lastID = last;
+            }
             else if (argument == "--catalog") options.catalogPlist = requireValue();
             else if (argument == "--export") exportDirectory = requireValue();
             else if (argument == "--resolve")
@@ -110,14 +152,24 @@ int main(int argc, char** argv)
             else if (argument.starts_with("--"))
                 throw std::runtime_error("unknown option " + argument);
             else
-                inputs.emplace_back(argument);
+                throw std::runtime_error("unexpected positional input " + argument);
         }
-        if (inputs.empty())
-            throw std::runtime_error("load requires at least one JBT or directory");
+        if (!customSources.empty() && !customSources.back().firstID)
+            throw std::runtime_error("the final --custom-dir has no --custom-range");
+        std::vector<bmt::DLCSource> sources;
+        if (officialDirectory)
+            sources.push_back({bmt::DLCType::Official, *officialDirectory});
+        if (jbhotDirectory)
+            sources.push_back({bmt::DLCType::JBHot, *jbhotDirectory});
+        sources.insert(sources.end(), customSources.begin(), customSources.end());
+        if (sources.empty())
+            throw std::runtime_error("load requires --official, --jbhot, or --custom-dir");
+        if (jbhotDirectory && !options.jbhotDefaultsPlist)
+            throw std::runtime_error("--jbhot requires --jbhot-plist");
         if (exportDirectory)
             options.failureMode = bmt::FailureMode::Strict;
 
-        auto result = bmt::LoadPacks(inputs, options);
+        auto result = bmt::LoadPacks(sources, options);
         size_t instances = 0;
         size_t conflicts = 0;
         for (const auto& [id, packs] : result.packs)
@@ -135,7 +187,8 @@ int main(int argc, char** argv)
         if (resolve || exportDirectory)
         {
             const auto remaps = bmt::ResolveConflicts(result, resolveOptions);
-            std::cout << "remapped " << remaps.size() << " packs\n";
+            std::cout << "dropped " << result.droppedDuplicates
+                      << " identical packs; remapped " << remaps.size() << " packs\n";
         }
         if (exportDirectory)
         {

@@ -1,6 +1,7 @@
 #ifndef BMT_JBT_H
 #define BMT_JBT_H
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -45,6 +46,13 @@ namespace bmt
         JBHot,
     };
 
+    enum class DLCType
+    {
+        Official,
+        JBHot,
+        Custom,
+    };
+
     struct PackResource
     {
         std::string name;
@@ -78,6 +86,10 @@ namespace bmt
         std::filesystem::path sourcePath;
         PackFormat format = PackFormat::Plain;
         CatalogSource catalogSource = CatalogSource::None;
+        DLCType dlcType = DLCType::Custom;
+        size_t dlcOrder = 0;
+        uint32_t customFirstID = 0;
+        uint32_t customLastID = 0;
         InfoRevision infoRevision = InfoRevision::InfoV2;
         std::string infoMember;
         std::string name;
@@ -119,9 +131,15 @@ namespace bmt
         LoadMode mode = LoadMode::Lazy;
         FailureMode failureMode = FailureMode::Continue;
         std::optional<std::filesystem::path> jbhotDefaultsPlist;
-        std::optional<std::filesystem::path> musicDataJson;
-        std::optional<std::filesystem::path> serverDataJson;
         std::optional<std::filesystem::path> catalogPlist;
+    };
+
+    struct DLCSource
+    {
+        DLCType type = DLCType::Custom;
+        std::filesystem::path directory;
+        uint32_t firstID = 0;
+        uint32_t lastID = 0;
     };
 
     struct LoadResult
@@ -130,6 +148,7 @@ namespace bmt
         std::vector<CatalogEntry> catalog;
         std::vector<Playlist> playlists;
         std::vector<Diagnostic> diagnostics;
+        size_t droppedDuplicates = 0;
     };
 
     struct ResolveOptions
@@ -145,17 +164,13 @@ namespace bmt
         uint32_t newID = 0;
     };
 
-    LoadResult LoadPacks(const std::vector<std::filesystem::path>& inputs,
+    LoadResult LoadPacks(const std::vector<DLCSource>& sources,
                          const LoadOptions& options = {});
-    std::vector<IDRemap> ResolveConflicts(PackTable& packs,
-                                          const ResolveOptions& options = {});
     std::vector<IDRemap> ResolveConflicts(LoadResult& result,
                                           const ResolveOptions& options = {});
-    void ExportPacks(PackTable& packs, const std::filesystem::path& outputDirectory);
     void ExportPacks(LoadResult& result, const std::filesystem::path& outputDirectory);
 
     std::vector<CatalogEntry> LoadOfficialCatalog(const std::filesystem::path& plistPath);
-    std::vector<Playlist> LoadJBHotPlaylists(const std::filesystem::path& serverDataJson);
     std::vector<uint8_t> DecryptOfficialMusicList(const std::filesystem::path& encryptedPath,
                                                   const std::filesystem::path& keychainDump,
                                                   std::string_view bundleID = "jp.konami.jubeatplus");

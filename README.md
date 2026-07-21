@@ -25,32 +25,37 @@ Decrypt the original runtime `mulist` with an `ApplicationUniqueID` Keychain dum
 Load official packs (a companion `mulist.plist` is discovered automatically):
 
 ```sh
-./build/BemaniTools load /path/to/official-packs
+./build/BemaniTools load --official /path/to/official-packs
 ```
 
-Load JBHot packs:
+Load JBHot packs. The Loader decrypts both `musicData` and `serverData` directly
+from the NSUserDefaults plist:
 
 ```sh
 ./build/BemaniTools load \
-  --jbhot-plist /path/to/jp.konmai.jbhot2.T2SSHXUSCG.plist \
-  --server-data /path/to/serverData.json \
-  /path/to/jbhot-packs
+  --jbhot /path/to/jbhot-packs \
+  --jbhot-plist=/path/to/jp.konmai.jbhot2.T2SSHXUSCG.plist
 ```
 
-Resolve conflicts and export BF-encrypted JBTs plus a plaintext official-format `mulist.plist`:
+Custom DLC directories accept either BF-encrypted or plaintext JBTs. Every Custom
+DLC must be followed by its own non-overlapping allocation range:
 
 ```sh
 ./build/BemaniTools load \
-  --jbhot-plist /path/to/jbhot-defaults.plist \
-  --server-data /path/to/serverData.json \
+  --official /path/to/official-packs \
+  --jbhot /path/to/jbhot-packs \
+  --jbhot-plist=/path/to/jbhot-defaults.plist \
+  --custom-dir=/path/to/custom-one --custom-range=1100,2200 \
+  --custom-dir=/path/to/custom-two --custom-range=2211,2300 \
   --resolve 600000000 899999999 \
-  --export /path/to/output \
-  /path/to/official-packs /path/to/jbhot-packs
+  --export /path/to/output
 ```
 
-When `--server-data` is present, JBHot playlists are exported as an official-format
-`playlists.plist`. Playlist music IDs follow the JBHot pack instance when conflict
-resolution assigns that instance a new ID.
+Official IDs never change. JBHot IDs only move when they conflict with a
+non-identical Official pack. A conflicting Custom component uses that Custom DLC's
+own range. Before remapping, decrypted JBT members are compared byte-for-byte and
+later identical instances are dropped with priority Official, JBHot, then Custom
+command-line order. JBHot playlists follow any resulting JBHot ID changes.
 
-The library API is declared in `include/Bemani/JBT.h`. `LoadPacks` returns
+The library API is declared in `include/Bemani/JBT.h`. `LoadResult::packs` is a
 `std::map<uint32_t, std::vector<MusicPack>>`; lazy loading is the default and eager loading is available through `LoadOptions`.
