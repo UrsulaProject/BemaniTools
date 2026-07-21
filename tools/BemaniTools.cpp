@@ -43,7 +43,8 @@ namespace
             << "  --resolve <first> <last>   JBHot conflict ID range\n"
             << "  --export <directory>       write JBTs, mulist.plist, and playlists.plist\n"
             << "  --encrypt-jbt=true|false   encrypt output JBT members (default: true)\n"
-            << "  --mulist-key=<key>         also write encrypted mulist using this raw key\n";
+            << "  --mulist-key=<key>         also write encrypted mulist using this raw key\n"
+            << "  --playlist-export <path>   write merged playlists.plist without exporting JBTs\n";
     }
 
     uint32_t ParseID(const char* text)
@@ -108,6 +109,7 @@ int main(int argc, char** argv)
         bmt::ExportOptions exportOptions;
         bool resolve = false;
         std::optional<fs::path> exportDirectory;
+        std::optional<fs::path> playlistExport;
         std::optional<fs::path> officialDirectory;
         std::optional<fs::path> jbhotDirectory;
         std::vector<bmt::DLCSource> customSources;
@@ -153,6 +155,7 @@ int main(int argc, char** argv)
             }
             else if (argument == "--catalog") options.catalogPlist = requireValue();
             else if (argument == "--export") exportDirectory = requireValue();
+            else if (argument == "--playlist-export") playlistExport = requireValue();
             else if (argument.starts_with("--encrypt-jbt="))
                 exportOptions.encryptJBT = ParseBoolean(std::string_view(argument).substr(14));
             else if (argument.starts_with("--mulist-key="))
@@ -216,6 +219,12 @@ int main(int argc, char** argv)
                 std::cerr << "warning: " << result.warnings[index].path << ": "
                           << result.warnings[index].message << '\n';
             std::cout << "exported to " << *exportDirectory << '\n';
+        }
+        if (playlistExport)
+        {
+            bmt::ExportPlaylists(result.playlists, *playlistExport);
+            std::cout << "exported " << result.playlists.size()
+                      << " playlists to " << *playlistExport << '\n';
         }
         return result.diagnostics.empty() ? 0 : 2;
     }

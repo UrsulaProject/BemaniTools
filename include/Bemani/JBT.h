@@ -118,6 +118,7 @@ namespace bmt
         std::string id;
         std::string name;
         std::vector<uint32_t> musicIDs;
+        DLCType dlcType = DLCType::JBHot;
     };
 
     struct Diagnostic
@@ -178,6 +179,9 @@ namespace bmt
     void ExportPacks(LoadResult& result,
                      const std::filesystem::path& outputDirectory,
                      const ExportOptions& options = {});
+    std::vector<Playlist> LoadPlaylists(const std::filesystem::path& plistPath);
+    void ExportPlaylists(const std::vector<Playlist>& playlists,
+                         const std::filesystem::path& plistPath);
 
     std::vector<CatalogEntry> LoadOfficialCatalog(const std::filesystem::path& plistPath);
     std::vector<uint8_t> DecryptOfficialMusicList(const std::filesystem::path& encryptedPath,

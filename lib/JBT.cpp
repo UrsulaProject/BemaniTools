@@ -1025,15 +1025,14 @@ namespace
         PlistPtr root(plist_new_array());
         for (const auto& playlist : playlists)
         {
-            if (playlist.id.empty())
-                throw std::runtime_error("playlist has no PLID");
+            if (playlist.name.empty())
+                throw std::runtime_error("playlist has no name");
             plist_t item = plist_new_dict();
+            plist_dict_set_item(item, "LIST_NAME", plist_new_string(playlist.name.c_str()));
             plist_t list = plist_new_array();
             for (const uint32_t id : playlist.musicIDs)
                 plist_array_append_item(list, plist_new_uint(id));
             plist_dict_set_item(item, "LIST", list);
-            plist_dict_set_item(item, "NAME", plist_new_string(playlist.name.c_str()));
-            plist_dict_set_item(item, "PLID", plist_new_string(playlist.id.c_str()));
             plist_array_append_item(root.get(), item);
         }
         return SerializePlist(root.get(), PLIST_FORMAT_XML);
@@ -1080,6 +1079,48 @@ namespace bmt
             entry.hasHoldFlag = plist_dict_get_item(item, "holdFlag") != nullptr;
             if (entry.id)
                 output.push_back(std::move(entry));
+        }
+        return output;
+    }
+
+    std::vector<Playlist> LoadPlaylists(const fs::path& plistPath)
+    {
+        auto root = ParsePlist(ReadFile(plistPath));
+        if (plist_get_node_type(root.get()) != PLIST_ARRAY)
+            throw std::runtime_error("playlists plist is not an array");
+        std::vector<Playlist> output;
+        const uint32_t count = plist_array_get_size(root.get());
+        output.reserve(count);
+        for (uint32_t index = 0; index < count; ++index)
+        {
+            plist_t item = plist_array_get_item(root.get(), index);
+            if (!item || plist_get_node_type(item) != PLIST_DICT)
+                throw std::runtime_error("playlists plist contains a non-dictionary item");
+            Playlist playlist;
+            playlist.id = PlistString(item, "PLID");
+            playlist.name = PlistString(item, "LIST_NAME");
+            if (playlist.name.empty())
+                playlist.name = PlistString(item, "NAME");
+            if (playlist.name.empty())
+                throw std::runtime_error("playlist has no LIST_NAME");
+            plist_t list = plist_dict_get_item(item, "LIST");
+            if (!list || plist_get_node_type(list) != PLIST_ARRAY)
+                throw std::runtime_error("playlist has no LIST array");
+            const uint32_t musicCount = plist_array_get_size(list);
+            playlist.musicIDs.reserve(musicCount);
+            for (uint32_t musicIndex = 0; musicIndex < musicCount; ++musicIndex)
+            {
+                plist_t musicID = plist_array_get_item(list, musicIndex);
+                if (!musicID || plist_get_node_type(musicID) != PLIST_UINT)
+                    throw std::runtime_error("playlist contains a non-integer music ID");
+                uint64_t value = 0;
+                plist_get_uint_val(musicID, &value);
+                if (value > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("playlist music ID is outside uint32 range");
+                playlist.musicIDs.push_back(static_cast<uint32_t>(value));
+            }
+            playlist.dlcType = DLCType::Official;
+            output.push_back(std::move(playlist));
         }
         return output;
     }
@@ -1170,6 +1211,18 @@ namespace bmt
                       [](const auto& left, const auto& right) { return left.id < right.id; });
         }
         auto musicData = std::make_shared<JBHotMap>(std::move(jbhotDefaults.music));
+
+        for (const auto& source : sources)
+        {
+            const fs::path companion = source.directory / "playlists.plist";
+            if (source.type == DLCType::Official && fs::is_regular_file(companion))
+            {
+                auto officialPlaylists = LoadPlaylists(companion);
+                result.playlists.insert(result.playlists.begin(),
+                                        std::make_move_iterator(officialPlaylists.begin()),
+                                        std::make_move_iterator(officialPlaylists.end()));
+            }
+        }
 
         std::vector<CatalogEntry> officialCatalog;
         std::unordered_map<size_t, CatalogMap> catalogsByDLC;
@@ -1418,6 +1471,8 @@ namespace bmt
         }
         for (auto& playlist : result.playlists)
         {
+            if (playlist.dlcType != DLCType::JBHot)
+                continue;
             for (auto& id : playlist.musicIDs)
             {
                 if (const auto remapped = jbhotIDs.find(id); remapped != jbhotIDs.end())
@@ -1480,5 +1535,10 @@ namespace bmt
                      const ExportOptions& options)
     {
         ExportPacksImpl(result.packs, &result.playlists, outputDirectory, options, result.warnings);
+    }
+
+    void ExportPlaylists(const std::vector<Playlist>& playlists, const fs::path& plistPath)
+    {
+        WriteFile(plistPath, BuildOfficialPlaylists(playlists));
     }
 }

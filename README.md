@@ -59,6 +59,11 @@ plaintext. When `--mulist-key` is present, the exporter additionally writes an
 official BF-encrypted `mulist`, deriving the codec key from the supplied raw key
 and prepending four random bytes before the plist as the game expects.
 
+An Official DLC companion `playlists.plist` is merged before the playlists from
+JBHot `serverData`. Conflict resolution remaps only the JBHot playlist IDs. Use
+`--playlist-export /path/to/playlists.plist` to write the merged official
+`LIST_NAME`/`LIST` format without exporting JBTs.
+
 Official IDs never change. JBHot IDs only move when they conflict with a
 non-identical Official pack. A conflicting Custom component uses that Custom DLC's
 own range. Before remapping, decrypted JBT members are compared byte-for-byte and
