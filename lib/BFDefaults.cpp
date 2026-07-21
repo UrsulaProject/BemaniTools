@@ -1,15 +1,17 @@
 //
 // Created by Naville on 2026/7/16.
 //
-#include <Bemani/BFCodec.h>
-#include <cassert>
-#include <codecvt>
-#include <fstream>
-static uint32_t default_P[18] = {
+#include <Bemani/BFDefaults.h>
+
+#include <array>
+
+namespace
+{
+static constexpr uint32_t default_P[18] = {
     0x243F6A88, 0x85A308D3, 0x13198A2E, 0x3707344, 0xA4093822, 0x299F31D0, 0x82EFA98, 0xEC4E6C89, 0x452821E6,
     0x38D01377, 0xBE5466CF, 0x34E90C6C, 0xC0AC29B7, 0xC97C50DD, 0x3F84D5B5, 0xB5470917, 0x9216D5D9, 0x8979FB1B
 };
-static uint32_t default_S[4][256] = {
+static constexpr uint32_t default_S[4][256] = {
     {
         0xD1310BA6, 0x98DFB5AC, 0x2FFD72DB, 0xD01ADFB7, 0xB8E1AFED, 0x6A267E96, 0xBA7C9045, 0xF12C7F99, 0x24A19947,
         0xB3916CF7, 0x801F2E2, 0x858EFC16, 0x636920D8, 0x71574E69, 0xA458FEA3, 0xF4933D7E,
@@ -147,7 +149,7 @@ static uint32_t default_S[4][256] = {
         0xA65CDEA0, 0x3F09252D, 0xC208E69F, 0xB74E6132, 0xCE77E25B, 0x578FDFE3, 0x3AC372E6,
     }
 };
-static uint8_t default_IV[8] = {0xE3,0x66 ,0x31 ,0xDA ,0x2C ,0x85 ,0xA0 ,0x64};
+static constexpr uint8_t default_IV[8] = {0xE3,0x66 ,0x31 ,0xDA ,0x2C ,0x85 ,0xA0 ,0x64};
 
 template <size_t M, size_t N>
 constexpr std::array<std::array<uint32_t, N>, M>
@@ -162,33 +164,25 @@ ToStdArray(const uint32_t (&src)[M][N])
     return dst;
 }
 
-int main()
+}
+
+namespace bmt
 {
-    std::vector<uint8_t> Key{0xf9,0xa1,0x42,0xc7,0x0b,0x07,0xd9,0xa8,0x09,0x3b,0x56,0xb8,0xc2,0xee,0xb6,0x98};
-    std::array<uint32_t,18> P = std::to_array(default_P);
-    bmt::BFCodec Coder(P,ToStdArray(default_S),Key);
-    std::ifstream fStream("/Users/naville/Downloads/jbhot/411090002/infov2", std::ios::in|std::ios::binary);
-    std::vector<uint8_t> data((std::istreambuf_iterator<char>(fStream)), std::istreambuf_iterator<char>());
-    assert(data.size() >= 8);
-
-    auto readBE32 = [](const uint8_t* ptr) -> uint32_t
+    const std::array<uint32_t, 18>& DefaultBlowfishP() noexcept
     {
-        return (static_cast<uint32_t>(ptr[0]) << 24) |
-            (static_cast<uint32_t>(ptr[1]) << 16) |
-            (static_cast<uint32_t>(ptr[2]) << 8) |
-            static_cast<uint32_t>(ptr[3]);
-    };
-    const uint32_t origLen = readBE32(data.data() + data.size() - 8);
-    const uint32_t encLen = readBE32(data.data() + data.size() - 4);
-    assert(encLen == data.size() - 8);
-    assert(encLen == ((origLen + 7) & ~7U));
-    std::vector<uint8_t> cipherText(data.begin(), data.end() - 8);
+        static constexpr auto value = std::to_array(default_P);
+        return value;
+    }
 
-    auto Dec = Coder.DecryptCBC(cipherText,std::to_array(default_IV));
-    Dec.resize(origLen);
+    const std::array<std::array<uint32_t, 256>, 4>& DefaultBlowfishS() noexcept
+    {
+        static constexpr auto value = ToStdArray(default_S);
+        return value;
+    }
 
-    std::ofstream out("/Users/naville/Downloads/jbhot/411090002/infov2-decrypted.plist", std::ios::out | std::ios::binary);
-    out.write(reinterpret_cast<const char*>(Dec.data()), Dec.size());
-    out.close();
-    return 0;
+    const std::array<uint8_t, 8>& DefaultBlowfishIV() noexcept
+    {
+        static constexpr auto value = std::to_array(default_IV);
+        return value;
+    }
 }

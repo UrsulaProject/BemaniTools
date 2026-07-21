@@ -232,3 +232,4 @@ $RECYCLE.BIN/
 __pycache__/
 *.pyc
 .idea/
+/build/

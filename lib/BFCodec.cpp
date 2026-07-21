@@ -3,32 +3,26 @@
 //
 
 #include "Bemani/BFCodec.h"
-#include <cassert>
+#include <stdexcept>
 #include <tuple>
 namespace bmt
 {
     BFCodec::BFCodec(const std::array<uint32_t, 18>& P_,
                      const std::array<std::array<uint32_t, 256>, 4> S_, const std::vector<uint8_t>& Key) : P(P_), S(S_)
     {
-
+        if (Key.empty())
+            throw std::invalid_argument("BFCodec key must not be empty");
         size_t j = 0;
         const size_t keySize = Key.size();
         for (unsigned i = 0;i < 18;i++)
         {
-            const uint32_t word = Key[j] << 24|
-                    (Key[(j + 1) % keySize] << 16)
-                | (Key[(j + 2) % keySize] << 8)
-                | Key[(j + 3) % keySize];
+            const uint32_t word = (static_cast<uint32_t>(Key[j]) << 24) |
+                    (static_cast<uint32_t>(Key[(j + 1) % keySize]) << 16)
+                | (static_cast<uint32_t>(Key[(j + 2) % keySize]) << 8)
+                | static_cast<uint32_t>(Key[(j + 3) % keySize]);
             P[i] = P[i] ^ word;
             j = (j + 4) % keySize;
         }
-        // Stage 1
-        printf("Stage 1\n");
-        for (unsigned i = 0;i < 18;i++)
-        {
-            printf("P[%d] = %x ",i,P[i]);
-        }
-        printf("\n");
         uint32_t L = 0, R = 0;
         for (uint32_t i =0;i < 18;i = i + 2)
         {
@@ -36,13 +30,6 @@ namespace bmt
             P[i] = L;
             P[i + 1] = R;
         }
-        printf("Stage 2\n");
-        for (unsigned i = 0;i < 18;i++)
-        {
-            printf("P[%d] = %x ",i,P[i]);
-        }
-        printf("\n");
-
         for (auto& Box : S)
         {
             for (uint32_t i = 0; i < 256; i = i + 2)
@@ -91,9 +78,10 @@ namespace bmt
         return std::make_pair(outL, outR);
     }
 
-    std::vector<uint8_t> BFCodec::DecryptCBC(const std::vector<uint8_t> cipherText, const std::array<uint8_t, 8>& IV) const noexcept
+    std::vector<uint8_t> BFCodec::DecryptCBC(const std::vector<uint8_t>& cipherText, const std::array<uint8_t, 8>& IV) const
     {
-        assert(cipherText.size() % 8 == 0);
+        if (cipherText.size() % 8 != 0)
+            throw std::invalid_argument("BFCodec ciphertext length must be a multiple of 8");
         std::vector<uint8_t> out(cipherText.size());
         auto readBE32 = [](const uint8_t* ptr) -> uint32_t
         {
@@ -112,7 +100,7 @@ namespace bmt
         uint32_t prevL = readBE32(IV.data());
         uint32_t prevR = readBE32(IV.data() + 4);
 
-        for (decltype(cipherText)::size_type i = 0; i < cipherText.size(); i = i + 8)
+        for (size_t i = 0; i < cipherText.size(); i = i + 8)
         {
             uint32_t cL = readBE32(cipherText.data() + i);
             uint32_t cR = readBE32(cipherText.data() + i + 4);
@@ -127,10 +115,11 @@ namespace bmt
         return out;
     }
 
-    std::vector<uint8_t> BFCodec::EncryptCBC(const std::vector<uint8_t> cipherText, const std::array<uint8_t, 8>& IV) const noexcept
+    std::vector<uint8_t> BFCodec::EncryptCBC(const std::vector<uint8_t>& plainText, const std::array<uint8_t, 8>& IV) const
     {
-        assert(cipherText.size() % 8 == 0);
-        std::vector<uint8_t> out(cipherText.size());
+        if (plainText.size() % 8 != 0)
+            throw std::invalid_argument("BFCodec plaintext length must be a multiple of 8");
+        std::vector<uint8_t> out(plainText.size());
         auto readBE32 = [](const uint8_t* ptr) -> uint32_t
         {
             return (static_cast<uint32_t>(ptr[0]) << 24) |
@@ -148,10 +137,10 @@ namespace bmt
         uint32_t prevL = readBE32(IV.data());
         uint32_t prevR = readBE32(IV.data() + 4);
 
-        for (decltype(cipherText)::size_type i = 0; i < cipherText.size(); i = i + 8)
+        for (size_t i = 0; i < plainText.size(); i = i + 8)
         {
-            uint32_t pL = readBE32(cipherText.data() + i);
-            uint32_t pR = readBE32(cipherText.data() + i + 4);
+            uint32_t pL = readBE32(plainText.data() + i);
+            uint32_t pR = readBE32(plainText.data() + i + 4);
             auto [cL, cR] = EncryptBlock(pL ^ prevL, pR ^ prevR);
             writeBE32(out.data() + i, cL);
             writeBE32(out.data() + i + 4, cR);

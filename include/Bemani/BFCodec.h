@@ -14,8 +14,8 @@ namespace bmt
     public:
         BFCodec() = delete;
         BFCodec(const std::array<uint32_t,18>& P,const std::array<std::array<uint32_t,256>,4> S,const std::vector<uint8_t>& Key);
-        std::vector<uint8_t> DecryptCBC(const std::vector<uint8_t> cipherText,const std::array<uint8_t,8>& IV) const noexcept;
-        std::vector<uint8_t> EncryptCBC(const std::vector<uint8_t> cipherText,const std::array<uint8_t,8>& IV) const noexcept;
+        std::vector<uint8_t> DecryptCBC(const std::vector<uint8_t>& cipherText,const std::array<uint8_t,8>& IV) const;
+        std::vector<uint8_t> EncryptCBC(const std::vector<uint8_t>& plainText,const std::array<uint8_t,8>& IV) const;
     protected:
         std::array<uint32_t,18> P;
         std::array<std::array<uint32_t,256>,4> S;
