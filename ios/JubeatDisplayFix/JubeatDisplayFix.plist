@@ -1,0 +1,6 @@
+{
+    Filter = {
+        Bundles = ("jp.konami.jubeatplus");
+        Executables = ("Jubeat");
+    };
+}

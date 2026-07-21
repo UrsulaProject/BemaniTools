@@ -233,3 +233,5 @@ __pycache__/
 *.pyc
 .idea/
 /build/
+/ios/JubeatDisplayFix/.theos/
+/ios/JubeatDisplayFix/packages/
