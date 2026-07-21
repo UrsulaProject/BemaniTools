@@ -62,7 +62,8 @@ and prepending four random bytes before the plist as the game expects.
 An Official DLC companion `playlists.plist` is merged before the playlists from
 JBHot `serverData`. Conflict resolution remaps only the JBHot playlist IDs. Use
 `--playlist-export /path/to/playlists.plist` to write the merged official
-`LIST_NAME`/`LIST` format without exporting JBTs.
+`LIST`/`NAME`/`PLID` format without exporting JBTs. Existing 32-character hex
+PLIDs are preserved; a random PLID is generated for source playlists without one.
 
 Official IDs never change. JBHot IDs only move when they conflict with a
 non-identical Official pack. A conflicting Custom component uses that Custom DLC's

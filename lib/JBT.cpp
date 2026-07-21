@@ -1020,6 +1020,33 @@ namespace
         return SerializePlist(root.get(), PLIST_FORMAT_XML);
     }
 
+    bool IsPlaylistID(std::string_view value) noexcept
+    {
+        if (value.size() != 32)
+            return false;
+        return std::all_of(value.begin(), value.end(), [](char character)
+        {
+            return (character >= '0' && character <= '9') ||
+                   (character >= 'a' && character <= 'f') ||
+                   (character >= 'A' && character <= 'F');
+        });
+    }
+
+    std::string GeneratePlaylistID()
+    {
+        std::array<uint8_t, 16> bytes{};
+        if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
+            throw std::runtime_error("cannot generate playlist PLID");
+        constexpr char Hex[] = "0123456789abcdef";
+        std::string output(32, '0');
+        for (size_t index = 0; index < bytes.size(); ++index)
+        {
+            output[index * 2] = Hex[bytes[index] >> 4];
+            output[index * 2 + 1] = Hex[bytes[index] & 0x0F];
+        }
+        return output;
+    }
+
     std::vector<uint8_t> BuildOfficialPlaylists(const std::vector<bmt::Playlist>& playlists)
     {
         PlistPtr root(plist_new_array());
@@ -1027,12 +1054,16 @@ namespace
         {
             if (playlist.name.empty())
                 throw std::runtime_error("playlist has no name");
+            const std::string id = playlist.id.empty() ? GeneratePlaylistID() : playlist.id;
+            if (!IsPlaylistID(id))
+                throw std::runtime_error("playlist PLID is not a 32-character hex string");
             plist_t item = plist_new_dict();
-            plist_dict_set_item(item, "LIST_NAME", plist_new_string(playlist.name.c_str()));
             plist_t list = plist_new_array();
             for (const uint32_t id : playlist.musicIDs)
                 plist_array_append_item(list, plist_new_uint(id));
             plist_dict_set_item(item, "LIST", list);
+            plist_dict_set_item(item, "NAME", plist_new_string(playlist.name.c_str()));
+            plist_dict_set_item(item, "PLID", plist_new_string(id.c_str()));
             plist_array_append_item(root.get(), item);
         }
         return SerializePlist(root.get(), PLIST_FORMAT_XML);
@@ -1098,11 +1129,15 @@ namespace bmt
                 throw std::runtime_error("playlists plist contains a non-dictionary item");
             Playlist playlist;
             playlist.id = PlistString(item, "PLID");
-            playlist.name = PlistString(item, "LIST_NAME");
+            playlist.name = PlistString(item, "NAME");
             if (playlist.name.empty())
-                playlist.name = PlistString(item, "NAME");
+                playlist.name = PlistString(item, "LIST_NAME");
             if (playlist.name.empty())
-                throw std::runtime_error("playlist has no LIST_NAME");
+                throw std::runtime_error("playlist has no NAME");
+            if (playlist.id.empty())
+                playlist.id = GeneratePlaylistID();
+            else if (!IsPlaylistID(playlist.id))
+                throw std::runtime_error("playlist PLID is not a 32-character hex string");
             plist_t list = plist_dict_get_item(item, "LIST");
             if (!list || plist_get_node_type(list) != PLIST_ARRAY)
                 throw std::runtime_error("playlist has no LIST array");

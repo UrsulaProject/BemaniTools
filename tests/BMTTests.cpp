@@ -179,7 +179,8 @@ int main()
     SetContent(hotExtension, {4});
     playlistConflict.packs[100] = {officialBase, hotBase};
     playlistConflict.packs[200] = {officialExtension, hotExtension};
-    playlistConflict.playlists.push_back({"playlist-id", "JBHot songs", {100, 200, 999}});
+    playlistConflict.playlists.push_back(
+        {"0123456789abcdef0123456789abcdef", "JBHot songs", {100, 200, 999}});
     playlistConflict.playlists.push_back({"", "Official songs", {100, 200}, bmt::DLCType::Official});
     const auto playlistRemaps = bmt::ResolveConflicts(playlistConflict, {600000000, 600000010});
     assert(playlistRemaps.size() == 2);
@@ -310,15 +311,24 @@ int main()
     std::ifstream playlistInput(output / "playlist-export" / "playlists.plist");
     const std::string playlistXML((std::istreambuf_iterator<char>(playlistInput)),
                                   std::istreambuf_iterator<char>());
-    const auto namePosition = playlistXML.find("<key>LIST_NAME</key>");
     const auto listPosition = playlistXML.find("<key>LIST</key>");
-    assert(namePosition < listPosition);
+    const auto namePosition = playlistXML.find("<key>NAME</key>");
+    const auto playlistIDPosition = playlistXML.find("<key>PLID</key>");
+    assert(listPosition < namePosition && namePosition < playlistIDPosition);
     assert(playlistXML.find("<integer>600000000</integer>") != std::string::npos);
     assert(playlistXML.find("<string>JBHot songs</string>") != std::string::npos);
-    assert(playlistXML.find("<key>PLID</key>") == std::string::npos);
+    assert(playlistXML.find("<string>0123456789abcdef0123456789abcdef</string>") != std::string::npos);
     const auto reloadedPlaylists = bmt::LoadPlaylists(output / "playlist-export" / "playlists.plist");
     assert(reloadedPlaylists.size() == 2);
     assert(reloadedPlaylists.front().name == "JBHot songs");
+    assert(reloadedPlaylists.front().id == "0123456789abcdef0123456789abcdef");
+    assert(reloadedPlaylists.back().id.size() == 32);
+    assert(std::all_of(reloadedPlaylists.back().id.begin(), reloadedPlaylists.back().id.end(),
+                       [](char character)
+                       {
+                           return (character >= '0' && character <= '9') ||
+                                  (character >= 'a' && character <= 'f');
+                       }));
     assert(reloadedPlaylists.back().musicIDs == (std::vector<uint32_t>{100, 200}));
 
     bmt::LoadResult danglingExtension;
