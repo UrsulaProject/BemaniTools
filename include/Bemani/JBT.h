@@ -157,6 +157,12 @@ namespace bmt
         uint32_t lastReservedID = 899999999;
     };
 
+    struct ExportOptions
+    {
+        bool encryptJBT = true;
+        std::optional<std::string> mulistKey;
+    };
+
     struct IDRemap
     {
         std::filesystem::path sourcePath;
@@ -168,7 +174,9 @@ namespace bmt
                          const LoadOptions& options = {});
     std::vector<IDRemap> ResolveConflicts(LoadResult& result,
                                           const ResolveOptions& options = {});
-    void ExportPacks(LoadResult& result, const std::filesystem::path& outputDirectory);
+    void ExportPacks(LoadResult& result,
+                     const std::filesystem::path& outputDirectory,
+                     const ExportOptions& options = {});
 
     std::vector<CatalogEntry> LoadOfficialCatalog(const std::filesystem::path& plistPath);
     std::vector<uint8_t> DecryptOfficialMusicList(const std::filesystem::path& encryptedPath,

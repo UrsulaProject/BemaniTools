@@ -6,6 +6,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 #include <plist/plist.h>
 #include <zip.h>
 
@@ -854,7 +855,7 @@ namespace
         return stream.str();
     }
 
-    void WriteEncryptedJBT(bmt::MusicPack& pack, const fs::path& path)
+    void WriteJBT(bmt::MusicPack& pack, const fs::path& path, bool encrypt)
     {
         RewriteInfoID(pack);
         int error = 0;
@@ -862,14 +863,21 @@ namespace
         if (!rawArchive)
             throw std::runtime_error("cannot create output JBT " + path.string());
         ZipPtr archive(rawArchive);
-        std::vector<std::vector<uint8_t>> encryptedMembers;
-        encryptedMembers.reserve(pack.resources.size());
+        std::vector<std::vector<uint8_t>> outputMembers;
+        outputMembers.reserve(pack.resources.size());
         for (auto& [name, resource] : pack.resources)
         {
-            const auto key = name == "infov3" ? IOSKey : IPadKey;
-            encryptedMembers.push_back(bmt::EncryptBFContainer(resource.Data(), key));
-            auto& encrypted = encryptedMembers.back();
-            zip_source_t* source = zip_source_buffer(archive.get(), encrypted.data(), encrypted.size(), 0);
+            if (encrypt)
+            {
+                const auto key = name == "infov3" ? IOSKey : IPadKey;
+                outputMembers.push_back(bmt::EncryptBFContainer(resource.Data(), key));
+            }
+            else
+            {
+                outputMembers.push_back(resource.Data());
+            }
+            auto& output = outputMembers.back();
+            zip_source_t* source = zip_source_buffer(archive.get(), output.data(), output.size(), 0);
             if (!source)
                 throw std::runtime_error("cannot allocate ZIP source for " + name);
             const zip_int64_t index = zip_file_add(archive.get(), name.c_str(), source,
@@ -1376,7 +1384,8 @@ namespace bmt
 
     static void ExportPacksImpl(PackTable& packs,
                                 const std::vector<Playlist>* playlists,
-                                const fs::path& outputDirectory)
+                                const fs::path& outputDirectory,
+                                const bmt::ExportOptions& options)
     {
         const auto catalog = BuildOfficialCatalog(packs);
         const auto playlistData = playlists ? BuildOfficialPlaylists(*playlists) : std::vector<uint8_t>{};
@@ -1397,15 +1406,26 @@ namespace bmt
         fs::create_directories(outputDirectory);
         for (auto& [id, instances] : packs)
         {
-            WriteEncryptedJBT(instances.front(), outputDirectory / PackFileName(id));
+            WriteJBT(instances.front(), outputDirectory / PackFileName(id), options.encryptJBT);
         }
         WriteFile(outputDirectory / "mulist.plist", catalog);
+        if (options.mulistKey)
+        {
+            std::vector<uint8_t> prefixedCatalog(4);
+            if (RAND_bytes(prefixedCatalog.data(), static_cast<int>(prefixedCatalog.size())) != 1)
+                throw std::runtime_error("cannot generate mulist prefix");
+            prefixedCatalog.insert(prefixedCatalog.end(), catalog.begin(), catalog.end());
+            const auto encryptedCatalog = bmt::EncryptBFContainer(prefixedCatalog, *options.mulistKey);
+            WriteFile(outputDirectory / "mulist", encryptedCatalog);
+        }
         if (playlists && !playlists->empty())
             WriteFile(outputDirectory / "playlists.plist", playlistData);
     }
 
-    void ExportPacks(LoadResult& result, const fs::path& outputDirectory)
+    void ExportPacks(LoadResult& result,
+                     const fs::path& outputDirectory,
+                     const ExportOptions& options)
     {
-        ExportPacksImpl(result.packs, &result.playlists, outputDirectory);
+        ExportPacksImpl(result.packs, &result.playlists, outputDirectory, options);
     }
 }

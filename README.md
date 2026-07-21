@@ -48,8 +48,16 @@ DLC must be followed by its own non-overlapping allocation range:
   --custom-dir=/path/to/custom-one --custom-range=1100,2200 \
   --custom-dir=/path/to/custom-two --custom-range=2211,2300 \
   --resolve 600000000 899999999 \
+  --encrypt-jbt=true \
+  --mulist-key=SHARED_KEY \
   --export /path/to/output
 ```
+
+Exported JBT members use the official BF encryption by default; pass
+`--encrypt-jbt=false` for plaintext members. `mulist.plist` is always written in
+plaintext. When `--mulist-key` is present, the exporter additionally writes an
+official BF-encrypted `mulist`, deriving the codec key from the supplied raw key
+and prepending four random bytes before the plist as the game expects.
 
 Official IDs never change. JBHot IDs only move when they conflict with a
 non-identical Official pack. A conflicting Custom component uses that Custom DLC's

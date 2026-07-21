@@ -15,6 +15,14 @@
 
 namespace
 {
+    std::vector<uint8_t> ReadBytes(const std::filesystem::path& path)
+    {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            throw std::runtime_error("cannot open test file " + path.string());
+        return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    }
+
     void SetContent(bmt::MusicPack& pack, std::initializer_list<uint8_t> bytes)
     {
         bmt::PackResource resource;
@@ -235,6 +243,25 @@ int main()
     assert(extensionEntry->extendFlag == 4);
     assert(extensionEntry->holdFlag == 0);
     assert(std::filesystem::is_regular_file(output / "mulist.plist"));
+    assert(!std::filesystem::exists(output / "mulist"));
+
+    const auto plaintextOutput = output / "plaintext-export";
+    bmt::ExportPacks(exportResult, plaintextOutput,
+                     {.encryptJBT = false, .mulistKey = "SHARED_KEY"});
+    assert(std::filesystem::is_regular_file(plaintextOutput / "mulist.plist"));
+    assert(std::filesystem::is_regular_file(plaintextOutput / "mulist"));
+    const auto decryptedCatalog = bmt::DecryptBFContainer(ReadBytes(plaintextOutput / "mulist"),
+                                                           "SHARED_KEY");
+    assert(decryptedCatalog.size() >= 4);
+    assert(std::vector<uint8_t>(decryptedCatalog.begin() + 4, decryptedCatalog.end()) ==
+           ReadBytes(plaintextOutput / "mulist.plist"));
+    auto plaintextLoaded = bmt::LoadPacks(
+        {{bmt::DLCType::Custom, plaintextOutput, 720000000, 720000100}},
+        {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
+    assert(plaintextLoaded.packs.size() == 5);
+    assert(plaintextLoaded.packs.at(123456789).front().format == bmt::PackFormat::Plain);
+    assert(plaintextLoaded.packs.at(123456789).front().resources.at("seq_bas").Data() ==
+           loaded.packs.at(123456789).front().resources.at("seq_bas").Data());
 
     const auto customDirectory = output / "custom";
     std::filesystem::create_directory(customDirectory);

@@ -41,7 +41,9 @@ namespace
             << "  --custom-range=<first>,<last>  range for preceding Custom DLC\n"
             << "  --catalog <path>           official plaintext mulist plist\n"
             << "  --resolve <first> <last>   JBHot conflict ID range\n"
-            << "  --export <directory>       write JBTs, mulist.plist, and playlists.plist\n";
+            << "  --export <directory>       write JBTs, mulist.plist, and playlists.plist\n"
+            << "  --encrypt-jbt=true|false   encrypt output JBT members (default: true)\n"
+            << "  --mulist-key=<key>         also write encrypted mulist using this raw key\n";
     }
 
     uint32_t ParseID(const char* text)
@@ -61,6 +63,15 @@ namespace
         const std::string first(text.substr(0, comma));
         const std::string last(text.substr(comma + 1));
         return {ParseID(first.c_str()), ParseID(last.c_str())};
+    }
+
+    bool ParseBoolean(std::string_view value)
+    {
+        if (value == "true")
+            return true;
+        if (value == "false")
+            return false;
+        throw std::runtime_error("boolean value must be true or false");
     }
 }
 
@@ -94,6 +105,7 @@ int main(int argc, char** argv)
 
         bmt::LoadOptions options;
         bmt::ResolveOptions resolveOptions;
+        bmt::ExportOptions exportOptions;
         bool resolve = false;
         std::optional<fs::path> exportDirectory;
         std::optional<fs::path> officialDirectory;
@@ -141,6 +153,12 @@ int main(int argc, char** argv)
             }
             else if (argument == "--catalog") options.catalogPlist = requireValue();
             else if (argument == "--export") exportDirectory = requireValue();
+            else if (argument.starts_with("--encrypt-jbt="))
+                exportOptions.encryptJBT = ParseBoolean(std::string_view(argument).substr(14));
+            else if (argument.starts_with("--mulist-key="))
+                exportOptions.mulistKey = argument.substr(13);
+            else if (argument == "--mulist-key")
+                exportOptions.mulistKey = requireValue().string();
             else if (argument == "--resolve")
             {
                 if (index + 2 >= argc)
@@ -192,7 +210,7 @@ int main(int argc, char** argv)
         }
         if (exportDirectory)
         {
-            bmt::ExportPacks(result, *exportDirectory);
+            bmt::ExportPacks(result, *exportDirectory, exportOptions);
             std::cout << "exported to " << *exportDirectory << '\n';
         }
         return result.diagnostics.empty() ? 0 : 2;
