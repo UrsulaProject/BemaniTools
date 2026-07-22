@@ -2,19 +2,20 @@
 
 #include <Bemani/BFContainer.h>
 
+#include "FileSupport.h"
+#include "ZipSupport.h"
+
 #include <json-c/json.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <plist/plist.h>
-#include <zip.h>
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -56,26 +57,6 @@ namespace
     };
     using JsonPtr = std::unique_ptr<json_object, JsonDeleter>;
 
-    struct ZipDeleter
-    {
-        void operator()(zip_t* value) const noexcept
-        {
-            if (value)
-                zip_discard(value);
-        }
-    };
-    using ZipPtr = std::unique_ptr<zip_t, ZipDeleter>;
-
-    struct ZipFileDeleter
-    {
-        void operator()(zip_file_t* value) const noexcept
-        {
-            if (value)
-                zip_fclose(value);
-        }
-    };
-    using ZipFilePtr = std::unique_ptr<zip_file_t, ZipFileDeleter>;
-
     struct CipherContextDeleter
     {
         void operator()(EVP_CIPHER_CTX* value) const noexcept
@@ -100,34 +81,10 @@ namespace
         std::vector<bmt::Playlist> playlists;
     };
 
-    std::vector<uint8_t> ReadFile(const fs::path& path)
-    {
-        std::ifstream input(path, std::ios::binary);
-        if (!input)
-            throw std::runtime_error("cannot open " + path.string());
-        input.seekg(0, std::ios::end);
-        const auto size = input.tellg();
-        if (size < 0)
-            throw std::runtime_error("cannot determine size of " + path.string());
-        input.seekg(0, std::ios::beg);
-        std::vector<uint8_t> output(static_cast<size_t>(size));
-        if (!output.empty())
-            input.read(reinterpret_cast<char*>(output.data()), static_cast<std::streamsize>(output.size()));
-        if (!input)
-            throw std::runtime_error("cannot read " + path.string());
-        return output;
-    }
-
-    void WriteFile(const fs::path& path, std::span<const uint8_t> data)
-    {
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
-        if (!output)
-            throw std::runtime_error("cannot create " + path.string());
-        if (!data.empty())
-            output.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-        if (!output)
-            throw std::runtime_error("cannot write " + path.string());
-    }
+    using bmt::detail::ListZipEntries;
+    using bmt::detail::ReadFile;
+    using bmt::detail::ReadZipEntry;
+    using bmt::detail::WriteFile;
 
     PlistPtr ParsePlist(std::span<const uint8_t> data, plist_format_t* format = nullptr)
     {
@@ -358,53 +315,6 @@ namespace
         if (error != json_tokener_success || !value)
             throw std::runtime_error("invalid JSON data");
         return JsonPtr(value);
-    }
-
-    std::vector<uint8_t> ReadZipEntry(const fs::path& path, std::string_view name)
-    {
-        int error = 0;
-        ZipPtr archive(zip_open(path.c_str(), ZIP_RDONLY, &error));
-        if (!archive)
-            throw std::runtime_error("cannot open ZIP " + path.string());
-        zip_stat_t stat{};
-        zip_stat_init(&stat);
-        if (zip_stat(archive.get(), std::string(name).c_str(), ZIP_FL_ENC_GUESS, &stat) != 0)
-            throw std::runtime_error("ZIP member not found: " + std::string(name));
-        ZipFilePtr member(zip_fopen(archive.get(), std::string(name).c_str(), ZIP_FL_ENC_GUESS));
-        if (!member)
-            throw std::runtime_error("cannot open ZIP member: " + std::string(name));
-        if (stat.size > std::numeric_limits<size_t>::max())
-            throw std::runtime_error("ZIP member is too large");
-        std::vector<uint8_t> data(static_cast<size_t>(stat.size));
-        size_t offset = 0;
-        while (offset < data.size())
-        {
-            const zip_int64_t count = zip_fread(member.get(), data.data() + offset, data.size() - offset);
-            if (count <= 0)
-                throw std::runtime_error("cannot read ZIP member: " + std::string(name));
-            offset += static_cast<size_t>(count);
-        }
-        return data;
-    }
-
-    std::vector<std::string> ListZipEntries(const fs::path& path)
-    {
-        int error = 0;
-        ZipPtr archive(zip_open(path.c_str(), ZIP_RDONLY, &error));
-        if (!archive)
-            throw std::runtime_error("cannot open JBT ZIP " + path.string());
-        const zip_int64_t count = zip_get_num_entries(archive.get(), 0);
-        if (count < 0)
-            throw std::runtime_error("cannot enumerate JBT ZIP " + path.string());
-        std::vector<std::string> names;
-        names.reserve(static_cast<size_t>(count));
-        for (zip_uint64_t index = 0; index < static_cast<zip_uint64_t>(count); ++index)
-        {
-            const char* name = zip_get_name(archive.get(), index, ZIP_FL_ENC_GUESS);
-            if (name && name[0] && name[std::strlen(name) - 1] != '/')
-                names.emplace_back(name);
-        }
-        return names;
     }
 
     json_object* JsonDataDictionary(json_object* root)
@@ -1066,36 +976,14 @@ namespace
         return stream.str();
     }
 
-    void AppendJBTDigest(const fs::path& path)
-    {
-        const auto bytes = ReadFile(path);
-        std::array<uint8_t, EVP_MAX_MD_SIZE> digest{};
-        unsigned int digestLength = 0;
-        if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &digestLength,
-                       EVP_md5(), nullptr) != 1 || digestLength != 16)
-            throw std::runtime_error("cannot calculate output JBT digest");
-        std::ofstream output(path, std::ios::binary | std::ios::app);
-        if (!output)
-            throw std::runtime_error("cannot append output JBT digest to " + path.string());
-        output.write(reinterpret_cast<const char*>(digest.data()), digestLength);
-        if (!output)
-            throw std::runtime_error("cannot write output JBT digest to " + path.string());
-    }
-
     void WriteJBT(bmt::MusicPack& pack, const fs::path& path, bool encrypt)
     {
         RewriteInfoID(pack);
-        if (!path.parent_path().empty())
-            fs::create_directories(path.parent_path());
-        int error = 0;
-        zip_t* rawArchive = zip_open(path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &error);
-        if (!rawArchive)
-            throw std::runtime_error("cannot create output JBT " + path.string());
-        ZipPtr archive(rawArchive);
-        std::vector<std::vector<uint8_t>> outputMembers;
+        std::vector<bmt::detail::ZipMember> outputMembers;
         outputMembers.reserve(pack.resources.size());
         for (auto& [name, resource] : pack.resources)
         {
+            std::vector<uint8_t> output;
             if (encrypt)
             {
                 const auto key = name == "infov3" ? IOSKey : IPadKey;
@@ -1106,35 +994,20 @@ namespace
                         throw std::runtime_error("cannot generate infov3 prefix");
                     const auto& plaintext = resource.Data();
                     prefixed.insert(prefixed.end(), plaintext.begin(), plaintext.end());
-                    outputMembers.push_back(bmt::EncryptBFContainer(prefixed, key));
+                    output = bmt::EncryptBFContainer(prefixed, key);
                 }
                 else
                 {
-                    outputMembers.push_back(bmt::EncryptBFContainer(resource.Data(), key));
+                    output = bmt::EncryptBFContainer(resource.Data(), key);
                 }
             }
             else
             {
-                outputMembers.push_back(resource.Data());
+                output = resource.Data();
             }
-            auto& output = outputMembers.back();
-            zip_source_t* source = zip_source_buffer(archive.get(), output.data(), output.size(), 0);
-            if (!source)
-                throw std::runtime_error("cannot allocate ZIP source for " + name);
-            const zip_int64_t index = zip_file_add(archive.get(), name.c_str(), source,
-                                                   ZIP_FL_OVERWRITE | ZIP_FL_ENC_UTF_8);
-            if (index < 0)
-            {
-                zip_source_free(source);
-                throw std::runtime_error("cannot add ZIP member " + name);
-            }
-            if (zip_set_file_compression(archive.get(), static_cast<zip_uint64_t>(index), ZIP_CM_STORE, 0) != 0)
-                throw std::runtime_error("cannot set ZIP store mode for " + name);
+            outputMembers.push_back({name, std::move(output)});
         }
-        if (zip_close(archive.get()) != 0)
-            throw std::runtime_error("cannot finalize output JBT " + path.string());
-        archive.release();
-        AppendJBTDigest(path);
+        bmt::detail::WriteStoredZipWithMD5(path, outputMembers);
     }
 
     std::shared_ptr<JBHotMap> StandaloneMusicData(const bmt::LoadOptions& options)
