@@ -14,6 +14,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -112,7 +113,7 @@ namespace
     }
 }
 
-int main()
+int RunTests()
 {
     const std::vector<uint8_t> plaintext = {
         'b', 'p', 'l', 'i', 's', 't', '0', '0', 0, 1, 2, 3, 4, 5, 6, 7, 8
@@ -597,4 +598,17 @@ int main()
 
     std::cout << "BMTTests passed\n";
     return 0;
+}
+
+int main()
+{
+    try
+    {
+        return RunTests();
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "unexpected exception: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
 }

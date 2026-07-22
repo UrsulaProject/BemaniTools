@@ -53,7 +53,8 @@ jobs:
           path: vcpkg
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
@@ -85,6 +86,13 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
           ${{ matrix.cmake_options }}
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Build
         run: cmake --build build --parallel
