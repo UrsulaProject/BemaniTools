@@ -5,9 +5,9 @@
   "builtin-baseline": "388141d50c018f9050bd0128152f7f8ac7f248b8",
   "dependencies": [
     "boost-program-options",
-    "json-c",
     "libplist",
     "libzip",
+    "nlohmann-json",
     "openssl"
   ]
 }

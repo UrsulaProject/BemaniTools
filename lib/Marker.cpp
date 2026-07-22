@@ -7,7 +7,7 @@
 #include "PlistSupport.h"
 #include "ZipSupport.h"
 
-#include <json-c/json.h>
+#include <nlohmann/json.hpp>
 #include <plist/plist.h>
 
 #include <algorithm>
@@ -15,7 +15,6 @@
 #include <charconv>
 #include <cstring>
 #include <limits>
-#include <memory>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -180,23 +179,34 @@ namespace
         if (!fs::exists(path))
             return {};
         const auto bytes = ReadFile(path);
-        const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        json_object* root = json_tokener_parse(text.c_str());
-        if (!root || json_object_get_type(root) != json_type_object)
+        nlohmann::json root;
+        try
         {
-            if (root)
-                json_object_put(root);
+            root = nlohmann::json::parse(bytes.begin(), bytes.end());
+        }
+        catch (const nlohmann::json::parse_error&)
+        {
             throw std::runtime_error("mapping.json root must be an object: " + path.string());
         }
-        std::unique_ptr<json_object, decltype(&json_object_put)> holder(root, json_object_put);
+        if (!root.is_object())
+            throw std::runtime_error("mapping.json root must be an object: " + path.string());
         std::map<uint32_t, uint32_t> output;
         std::set<uint32_t> targets;
-        json_object_object_foreach(root, key, value)
+        for (const auto& [key, value] : root.items())
         {
-            if (!value || json_object_get_type(value) != json_type_int)
+            if (!value.is_number_integer() && !value.is_number_unsigned())
                 throw std::runtime_error("mapping.json values must be integer IDs");
-            const int64_t target = json_object_get_int64(value);
-            if (target < 0 || target > std::numeric_limits<uint32_t>::max())
+            uint64_t target = 0;
+            if (value.is_number_unsigned())
+                target = value.get<uint64_t>();
+            else
+            {
+                const int64_t signedTarget = value.get<int64_t>();
+                if (signedTarget < 0)
+                    throw std::runtime_error("mapping.json target is outside uint32 range");
+                target = static_cast<uint64_t>(signedTarget);
+            }
+            if (target > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("mapping.json target is outside uint32 range");
             const uint32_t source = ParseID(key, "mapping.json source");
             if (!output.emplace(source, static_cast<uint32_t>(target)).second ||

@@ -7,12 +7,11 @@ project(BMT)
 find_package(Boost REQUIRED COMPONENTS program_options)
 find_package(OpenSSL QUIET)
 find_package(libzip CONFIG QUIET)
-find_package(json-c CONFIG QUIET)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-libplist CONFIG QUIET)
 
 if(NOT TARGET OpenSSL::Crypto OR
    NOT TARGET libzip::zip OR
-   NOT TARGET json-c::json-c OR
    NOT TARGET unofficial::libplist::libplist)
     find_package(PkgConfig REQUIRED)
 endif()
@@ -31,13 +30,6 @@ else()
     set(BMT_LIBZIP_TARGET PkgConfig::LIBZIP)
 endif()
 
-if(TARGET json-c::json-c)
-    set(BMT_JSONC_TARGET json-c::json-c)
-else()
-    pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
-    set(BMT_JSONC_TARGET PkgConfig::JSONC)
-endif()
-
 if(TARGET unofficial::libplist::libplist)
     set(BMT_LIBPLIST_TARGET unofficial::libplist::libplist)
 else()
@@ -52,8 +44,8 @@ target_include_directories(BMT PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
 target_link_libraries(BMT PUBLIC
     ${BMT_LIBZIP_TARGET}
     ${BMT_LIBPLIST_TARGET}
-    ${BMT_CRYPTO_TARGET}
-    ${BMT_JSONC_TARGET})
+    ${BMT_CRYPTO_TARGET})
+target_link_libraries(BMT PRIVATE nlohmann_json::nlohmann_json)
 
 add_executable(BemaniTools tools/BemaniTools.cpp)
 target_link_libraries(BemaniTools PRIVATE BMT Boost::program_options)

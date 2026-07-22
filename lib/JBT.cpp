@@ -7,7 +7,7 @@
 #include "ZipSupport.h"
 #include "PlistSupport.h"
 
-#include <json-c/json.h>
+#include <nlohmann/json.hpp>
 #include <plist/plist.h>
 
 #include <algorithm>
@@ -16,7 +16,6 @@
 #include <cstring>
 #include <iomanip>
 #include <limits>
-#include <memory>
 #include <set>
 #include <span>
 #include <sstream>
@@ -35,15 +34,7 @@ namespace
         "bgm", "index", "smallArtwork", "artwork", "nameBlack", "nameWhite"
     };
 
-    struct JsonDeleter
-    {
-        void operator()(json_object* value) const noexcept
-        {
-            if (value)
-                json_object_put(value);
-        }
-    };
-    using JsonPtr = std::unique_ptr<json_object, JsonDeleter>;
+    using Json = nlohmann::json;
 
     struct JBHotEntry
     {
@@ -100,29 +91,39 @@ namespace
         return fallback;
     }
 
-    std::string JsonString(json_object* dictionary, const char* key)
+    std::string JsonString(const Json& dictionary, const char* key)
     {
-        json_object* value = nullptr;
-        if (!dictionary || !json_object_object_get_ex(dictionary, key, &value) ||
-            json_object_get_type(value) != json_type_string)
+        if (!dictionary.is_object())
             return {};
-        return json_object_get_string(value);
+        const auto value = dictionary.find(key);
+        if (value == dictionary.end() || !value->is_string())
+            return {};
+        return value->get<std::string>();
     }
 
-    uint32_t JsonUInt(json_object* dictionary, const char* key, uint32_t fallback = 0)
+    uint32_t JsonUInt(const Json& dictionary, const char* key, uint32_t fallback = 0)
     {
-        json_object* value = nullptr;
-        if (!dictionary || !json_object_object_get_ex(dictionary, key, &value))
+        if (!dictionary.is_object())
             return fallback;
-        if (json_object_get_type(value) == json_type_int)
+        const auto value = dictionary.find(key);
+        if (value == dictionary.end())
+            return fallback;
+        if (value->is_number_unsigned())
         {
-            const int64_t number = json_object_get_int64(value);
+            const uint64_t number = value->get<uint64_t>();
+            if (number > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error(std::string(key) + " is outside uint32 range");
+            return static_cast<uint32_t>(number);
+        }
+        if (value->is_number_integer())
+        {
+            const int64_t number = value->get<int64_t>();
             if (number < 0 || number > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error(std::string(key) + " is outside uint32 range");
             return static_cast<uint32_t>(number);
         }
-        if (json_object_get_type(value) == json_type_string)
-            return ParseUInt(json_object_get_string(value));
+        if (value->is_string())
+            return ParseUInt(value->get_ref<const std::string&>());
         return fallback;
     }
 
@@ -136,39 +137,37 @@ namespace
             iv, EVP_aes_128_cbc());
     }
 
-    JsonPtr ParseJson(std::span<const uint8_t> data)
+    Json ParseJson(std::span<const uint8_t> data)
     {
-        json_tokener* tokener = json_tokener_new();
-        if (!tokener)
-            throw std::bad_alloc();
-        json_object* value = json_tokener_parse_ex(tokener,
-            reinterpret_cast<const char*>(data.data()), static_cast<int>(data.size()));
-        const auto error = json_tokener_get_error(tokener);
-        json_tokener_free(tokener);
-        if (error != json_tokener_success || !value)
+        try
+        {
+            return Json::parse(data.begin(), data.end());
+        }
+        catch (const Json::parse_error&)
+        {
             throw std::runtime_error("invalid JSON data");
-        return JsonPtr(value);
+        }
     }
 
-    json_object* JsonDataDictionary(json_object* root)
+    const Json& JsonDataDictionary(const Json& root)
     {
-        json_object* data = nullptr;
-        if (root && json_object_get_type(root) == json_type_object &&
-            json_object_object_get_ex(root, "data", &data) &&
-            json_object_get_type(data) == json_type_object)
-            return data;
-        if (root && json_object_get_type(root) == json_type_object)
+        if (root.is_object())
+        {
+            const auto data = root.find("data");
+            if (data != root.end() && data->is_object())
+                return *data;
             return root;
+        }
         throw std::runtime_error("musicData JSON does not contain an object data field");
     }
 
-    JBHotMap BuildJBHotMap(json_object* root)
+    JBHotMap BuildJBHotMap(const Json& root)
     {
         JBHotMap output;
-        json_object* data = JsonDataDictionary(root);
-        json_object_object_foreach(data, key, value)
+        const Json& data = JsonDataDictionary(root);
+        for (const auto& [key, value] : data.items())
         {
-            if (!value || json_object_get_type(value) != json_type_object)
+            if (!value.is_object())
                 continue;
             const uint32_t id = JsonUInt(value, "id", ParseUInt(key));
             JBHotEntry entry;
@@ -187,47 +186,48 @@ namespace
             entry.catalog.extURL = JsonString(value, "extendItem");
             entry.catalog.extendFlag = JsonUInt(value, "extendFlag");
             entry.catalog.holdFlag = JsonUInt(value, "holdFlag");
-            json_object* flagValue = nullptr;
-            entry.catalog.hasExtendFlag = json_object_object_get_ex(value, "extendFlag", &flagValue);
-            entry.catalog.hasHoldFlag = json_object_object_get_ex(value, "holdFlag", &flagValue);
+            entry.catalog.hasExtendFlag = value.contains("extendFlag");
+            entry.catalog.hasHoldFlag = value.contains("holdFlag");
             entry.catalog.originalID = JsonUInt(value, "origId");
             output[id] = std::move(entry);
         }
         return output;
     }
 
-    std::vector<bmt::Playlist> BuildJBHotPlaylists(json_object* root)
+    std::vector<bmt::Playlist> BuildJBHotPlaylists(const Json& root)
     {
-        json_object* data = JsonDataDictionary(root);
-        json_object* playlists = nullptr;
-        if (!json_object_object_get_ex(data, "playlist", &playlists) ||
-            json_object_get_type(playlists) != json_type_array)
+        const Json& data = JsonDataDictionary(root);
+        const auto playlists = data.find("playlist");
+        if (playlists == data.end() || !playlists->is_array())
             throw std::runtime_error("decrypted serverData has no playlist array");
         std::vector<bmt::Playlist> output;
-        const size_t count = json_object_array_length(playlists);
-        output.reserve(count);
-        for (size_t index = 0; index < count; ++index)
+        output.reserve(playlists->size());
+        for (const Json& value : *playlists)
         {
-            json_object* value = json_object_array_get_idx(playlists, index);
-            if (!value || json_object_get_type(value) != json_type_object)
+            if (!value.is_object())
                 throw std::runtime_error("serverData playlist contains a non-object item");
             bmt::Playlist playlist;
             playlist.id = JsonString(value, "id");
             playlist.name = JsonString(value, "name");
             if (playlist.id.empty())
                 throw std::runtime_error("serverData playlist has no id");
-            json_object* list = nullptr;
-            if (!json_object_object_get_ex(value, "list", &list) ||
-                json_object_get_type(list) != json_type_array)
+            const auto list = value.find("list");
+            if (list == value.end() || !list->is_array())
                 throw std::runtime_error("serverData playlist has no list array");
-            const size_t musicCount = json_object_array_length(list);
-            playlist.musicIDs.reserve(musicCount);
-            for (size_t musicIndex = 0; musicIndex < musicCount; ++musicIndex)
+            playlist.musicIDs.reserve(list->size());
+            for (const Json& musicID : *list)
             {
-                json_object* musicID = json_object_array_get_idx(list, musicIndex);
-                if (!musicID || json_object_get_type(musicID) != json_type_int)
+                if (!musicID.is_number_integer() && !musicID.is_number_unsigned())
                     throw std::runtime_error("serverData playlist contains a non-integer music ID");
-                const int64_t number = json_object_get_int64(musicID);
+                if (musicID.is_number_unsigned())
+                {
+                    const uint64_t number = musicID.get<uint64_t>();
+                    if (number > std::numeric_limits<uint32_t>::max())
+                        throw std::runtime_error("serverData playlist music ID is outside uint32 range");
+                    playlist.musicIDs.push_back(static_cast<uint32_t>(number));
+                    continue;
+                }
+                const int64_t number = musicID.get<int64_t>();
                 if (number < 0 || number > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("serverData playlist music ID is outside uint32 range");
                 playlist.musicIDs.push_back(static_cast<uint32_t>(number));
@@ -248,7 +248,7 @@ namespace
         const auto serverBytes = DecryptDefaultValue(encodedServer, "gh4hh5gh46555fgh");
         auto musicJson = ParseJson(musicBytes);
         auto serverJson = ParseJson(serverBytes);
-        return {BuildJBHotMap(musicJson.get()), BuildJBHotPlaylists(serverJson.get())};
+        return {BuildJBHotMap(musicJson), BuildJBHotPlaylists(serverJson)};
     }
 
     bool StartsWith(std::span<const uint8_t> data, std::string_view value) noexcept
@@ -599,19 +599,29 @@ namespace
         if (!fs::is_regular_file(path))
             throw std::runtime_error("mapping.json is not a regular file: " + path.string());
         auto root = ParseJson(ReadFile(path));
-        if (json_object_get_type(root.get()) != json_type_object)
+        if (!root.is_object())
             throw std::runtime_error("mapping.json root must be an object: " + path.string());
 
         IDMapping mapping;
         std::set<uint32_t> targets;
-        json_object_object_foreach(root.get(), key, value)
+        for (const auto& [key, value] : root.items())
         {
             const uint32_t oldID = ParseMappingID(key, "mapping.json source ID");
-            if (json_object_get_type(value) != json_type_int)
+            if (!value.is_number_integer() && !value.is_number_unsigned())
                 throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
                                          " must be an integer");
-            const int64_t rawTarget = json_object_get_int64(value);
-            if (rawTarget <= 0 || rawTarget > std::numeric_limits<uint32_t>::max())
+            uint64_t rawTarget = 0;
+            if (value.is_number_unsigned())
+                rawTarget = value.get<uint64_t>();
+            else
+            {
+                const int64_t signedTarget = value.get<int64_t>();
+                if (signedTarget <= 0)
+                    throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
+                                             " is outside the valid ID range");
+                rawTarget = static_cast<uint64_t>(signedTarget);
+            }
+            if (!rawTarget || rawTarget > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
                                          " is outside the valid ID range");
             const uint32_t newID = static_cast<uint32_t>(rawTarget);
@@ -1228,11 +1238,11 @@ namespace bmt
             if (encoded.empty())
                 continue;
             auto json = ParseJson(DecryptDefaultValue(encoded, key));
-            output.emplace(name, json_object_to_json_string_ext(json.get(), JSON_C_TO_STRING_PRETTY));
+            output.emplace(name, json.dump(4));
         }
 
-        JsonPtr details(json_object_new_object());
-        JsonPtr data(json_object_new_object());
+        Json details = Json::object();
+        Json data = Json::object();
         uint32_t version = 0;
         for (uint32_t index = 1; ; ++index)
         {
@@ -1241,21 +1251,19 @@ namespace bmt
             if (encoded.empty())
                 break;
             auto json = ParseJson(DecryptDefaultValue(encoded, "dbfzr5KWvVVAA7FP"));
-            json_object* chunk = nullptr;
-            if (json_object_object_get_ex(json.get(), "data", &chunk) &&
-                json_object_get_type(chunk) == json_type_object)
+            const auto chunk = json.find("data");
+            if (chunk != json.end() && chunk->is_object())
             {
-                json_object_object_foreach(chunk, key, value)
-                    json_object_object_add(data.get(), key, json_object_get(value));
+                for (const auto& [key, value] : chunk->items())
+                    data[key] = value;
             }
             version = index;
         }
         if (version)
         {
-            json_object_object_add(details.get(), "version", json_object_new_int64(version));
-            json_object_object_add(details.get(), "data", data.release());
-            output.emplace("musicDetail",
-                           json_object_to_json_string_ext(details.get(), JSON_C_TO_STRING_PRETTY));
+            details["version"] = version;
+            details["data"] = std::move(data);
+            output.emplace("musicDetail", details.dump(4));
         }
         return output;
     }

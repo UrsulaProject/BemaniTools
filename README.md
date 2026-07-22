@@ -6,7 +6,7 @@ Marker。核心库会自动识别明文、官方 BFCodec 和 JBHot 格式；CLI 
 ## 编译
 
 项目提供 `vcpkg.json`，推荐使用 vcpkg manifest 安装 Boost.Program_options、
-libzip、libplist 2.x、OpenSSL/libcrypto 和 json-c。首先准备 vcpkg，然后把
+libzip、libplist 2.x、OpenSSL/libcrypto 和 nlohmann-json。首先准备 vcpkg，然后把
 toolchain 传给 CMake：
 
 ```sh
