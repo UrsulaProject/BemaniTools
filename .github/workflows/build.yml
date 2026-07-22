@@ -29,14 +29,17 @@ jobs:
             triplet: x64-linux
             artifact: BemaniTools-linux-x64
             archive: BemaniTools-linux-x64.tar.gz
+            cmake_options: ""
           - runner: macos-15
             triplet: arm64-osx
             artifact: BemaniTools-macos-arm64
             archive: BemaniTools-macos-arm64.tar.gz
+            cmake_options: ""
           - runner: windows-2022
             triplet: x64-windows-static
             artifact: BemaniTools-windows-x64
             archive: BemaniTools-windows-x64.zip
+            cmake_options: -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
     steps:
       - name: Check out BemaniTools
@@ -81,6 +84,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          ${{ matrix.cmake_options }}
 
       - name: Build
         run: cmake --build build --parallel
