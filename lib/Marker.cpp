@@ -92,6 +92,22 @@ namespace
             throw std::runtime_error("cannot write " + path.string());
     }
 
+    void AppendMD5(const fs::path& path)
+    {
+        const auto bytes = ReadFile(path);
+        std::array<uint8_t, EVP_MAX_MD_SIZE> digest{};
+        unsigned int digestLength = 0;
+        if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &digestLength,
+                       EVP_md5(), nullptr) != 1 || digestLength != 16)
+            throw std::runtime_error("cannot calculate marker ZIP digest");
+        std::ofstream output(path, std::ios::binary | std::ios::app);
+        if (!output)
+            throw std::runtime_error("cannot append marker ZIP digest to " + path.string());
+        output.write(reinterpret_cast<const char*>(digest.data()), digestLength);
+        if (!output)
+            throw std::runtime_error("cannot write marker ZIP digest to " + path.string());
+    }
+
     bool StartsWith(std::span<const uint8_t> data, std::string_view prefix) noexcept
     {
         return data.size() >= prefix.size() &&
@@ -317,6 +333,7 @@ namespace
             zip_discard(raw);
             throw std::runtime_error("cannot finalize marker ZIP: " + message);
         }
+        AppendMD5(path);
     }
 
     bmt::MarkerPack ReadMarkerPack(const fs::path& path)
