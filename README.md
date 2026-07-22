@@ -1,99 +1,37 @@
-# BemaniTools
+# BemaniTools 使用说明
 
-C++20 library and CLI for loading plaintext, official BF-encrypted, and JBHot JBT music packs.
+BemaniTools 用来读取、转换和合并 jubeat 的 JBT 曲包、mulist、playlists 和
+Marker。核心库会自动识别明文、官方 BFCodec 和 JBHot 格式；CLI 只负责参数解析。
 
-## Build
+## 编译
 
-Dependencies: libzip, libplist 2.x, OpenSSL/libcrypto, and json-c.
-
-```sh
-/opt/homebrew/bin/cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
-/opt/homebrew/bin/cmake --build build -j4
-```
-
-## CLI
-
-The CLI uses command groups. Run `BemaniTools --help` or append `--help` to any
-command for its complete options.
-
-Decrypt or encrypt a runtime mulist with the raw string used before MD5 key
-derivation:
+依赖：CMake、Boost.Program_options、libzip、libplist 2.x、OpenSSL/libcrypto、
+json-c。
 
 ```sh
-./build/BemaniTools mulist decrypt \
-  --input /path/to/mulist --output /path/to/mulist.plist --key SHARED_KEY
-./build/BemaniTools mulist encrypt \
-  --input /path/to/mulist.plist --output /path/to/mulist --key SHARED_KEY
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build -j4
 ```
 
-Convert, expand, and repack JBTs. The `*-dir` forms recurse while preserving
-relative paths. JBHot inputs require the encrypted defaults plist. Packing uses
-official BF encryption unless `--plain` is supplied.
+下文假设当前目录是 BemaniTools 仓库，程序路径为：
 
-```sh
-./build/BemaniTools jbt unpack --input song.jbt --output expanded/song
-./build/BemaniTools jbt pack --input expanded/song --output song.jbt
-./build/BemaniTools jbt decrypt --input hot.jbt --output plain.jbt \
-  --jbhot-plist /path/to/defaults.plist
+```text
+./build/BemaniTools
 ```
 
-Merge complete DLC sources and export JBTs, mulist, and playlists:
+任意路径含空格或中文时都应使用引号。程序不会清空已有输出目录；正式导出时建议
+使用空目录，以免旧文件残留。
 
-```sh
-./build/BemaniTools dlc build \
-  --official /path/to/official \
-  --jbhot /path/to/hot \
-  --jbhot-plist /path/to/defaults.plist \
-  --custom-dir /path/to/custom-one \
-  --custom-dir /path/to/custom-two \
-  --output /path/to/output \
-  --encrypt-jbt=true --separate-output --mulist-key SHARED_KEY
-```
+## 通用格式规则
 
-Decrypt the known JBHot defaults payloads to formatted JSON:
-
-```sh
-./build/BemaniTools jbhot defaults-dump \
-  --input /path/to/defaults.plist --output-dir /path/to/json
-```
-
-Marker conversion mirrors JBT conversion. Decrypted/expanded members are real
-PNG files without the game's four-byte prefix; generated ZIPs use official BF
-encryption. `marker build` scans only actual `mk<id>.zip` files and exports the
-matching external banners.
-
-```sh
-./build/BemaniTools marker unpack --input mk0048.zip --output expanded/mk0048
-./build/BemaniTools marker pack --input expanded/mk0048 --output mk0048.zip
-./build/BemaniTools marker build \
-  --official /path/to/official-marker \
-  --jbhot /path/to/hot-marker \
-  --custom-dir /path/to/custom-marker \
-  --output /path/to/marker-output \
-  --marker-list-output /path/to/marker-output/marker-list.plist
-```
-
-Marker-list plaintext is an XML plist array containing `markerID`, `bannerName`,
-and `version`. `marker build` writes this plaintext form so an injected tweak can
-load it and pass the array directly to the game's `+[MarkerManager setMarkerList:]`.
-An integration example is provided in `ios/MarkerListLoaderExample.xm`.
-
-The standalone decrypt command remains available for inspecting an existing
-encrypted `PrefMarkerInfoList`. BemaniTools deliberately does not rebuild this
-archive; installation goes through the game's own `NSKeyedArchiver` and BFCodec
-implementation.
-
-```sh
-./build/BemaniTools marker-list decrypt \
-  --input PrefMarkerInfoList --output marker-list.plist
-```
-
-Exported music JBTs and marker ZIP members use official BF encryption. Runtime
-formats receive their original four-byte prefix: mulist, infov3, and official marker frames
-use random bytes, while decryption normalizes the application-visible payload.
-
-Each DLC is resolved as it is loaded. If an incoming file conflicts with a
-different pack already loaded, its directory must contain a `mapping.json` object:
+- 官方 BFCodec 中的四字节随机前缀由核心库透明处理。解包得到的 plist/PNG
+  不含前缀，重新加密时会自动生成新前缀。
+- `mulist --key` 和 `dlc build --mulist-key` 接收 MD5 之前的原始字符串，
+  例如 `SHARED_KEY`。
+- DLC 读取顺序固定为 Official → JBHot → Custom 参数顺序。内容完全相同的
+  后加载实例会被丢弃。
+- 同 ID 内容不同时，不会随机生成新 ID。发生冲突的新 DLC 必须在自己的根目录
+  提供 `mapping.json`：
 
 ```json
 {
@@ -102,17 +40,388 @@ different pack already loaded, its directory must contain a `mapping.json` objec
 }
 ```
 
-Keys are IDs from the JBT filenames and values are the final IDs. Mappings are
-always applied, including to JBT `info`, base/ext relationships, and playlists, so
-the result is stable when a DLC is loaded by itself. Missing mappings, stale keys,
-duplicate targets, and occupied mapping targets are rejected. Filename IDs and
-`info.ID` are tracked separately because real JBHot archives do not always make
-them equal. Related base/ext packs are merged atomically. Decrypted JBT members are
-compared byte-for-byte; a later identical relationship component is
-dropped, so CLI priority is Official, JBHot, then Custom command-line order. No IDs
-are generated automatically.
+JBT 映射的 key 是源 `.jbt` 文件名中的数字 ID，value 是最终 ID。映射同时作用于
+JBT 内部 `info.ID`、base/ext 关系、mulist 和 playlists。Marker 的映射则同时修改
+`mkXXXX.zip`、banner 名称和生成的 marker list。
 
-The music and marker APIs are declared in `include/Bemani/JBT.h` and
-`include/Bemani/Marker.h`. `LoadResult::packs` remains a
-`std::map<uint32_t, std::vector<MusicPack>>`; music resources are lazy by
-default and can be materialized eagerly with `LoadOptions`.
+## 命令说明
+
+运行总帮助：
+
+```sh
+./build/BemaniTools --help
+```
+
+运行某个命令的帮助：
+
+```sh
+./build/BemaniTools dlc build --help
+```
+
+### `dlc build`
+
+统一加载并合并完整 DLC，输出 JBT、`mulist.plist`、可选的加密 `mulist`，以及
+存在 playlist 时的 `playlists.plist`。
+
+```sh
+./build/BemaniTools dlc build [源目录参数] --output <输出目录> [选项]
+```
+
+源目录参数：
+
+- `--official <目录>`：官方 JBT 目录，只能指定一次。
+- `--jbhot <目录>`：JBHot JBT 目录，只能指定一次；必须同时传
+  `--jbhot-plist <defaults.plist>`。
+- `--custom-dir <目录>`：自定义 DLC，可重复传入。目录里的 JBT 可以是明文或
+  官方加密格式。
+- `--catalog <mulist.plist>`：显式指定官方明文 catalog。未指定时，每个非 Hot
+  源会自动读取自己根目录里的 `mulist.plist`。
+
+每个 DLC 目录只扫描根目录中的 `*.jbt`。可选伴随文件为 `mulist.plist`、
+`playlists.plist` 和 `mapping.json`。
+
+其他选项：
+
+- `--encrypt-jbt=true|false`：是否将输出 JBT 加密成官方格式，默认 `true`。
+- `--mulist-key <原始密钥>`：除明文 `mulist.plist` 外，再输出可直接部署的
+  加密 `mulist`。
+- `--separate-output`：JBT 分别输出到 `official/`、`jbhot/`、`custom-N/`；
+  mulist 和 playlists 仍在输出根目录。
+- `--eager`：加载时立刻解密所有资源；默认按需加载。
+- `--strict`：遇到第一个无效包立即停止；默认记录错误后继续处理其他包。
+
+默认输出结构：
+
+```text
+OUT/
+├── 000000001.jbt
+├── 000000002.jbt
+├── ...
+├── mulist.plist        # 始终生成，明文 XML
+├── mulist              # 仅指定 --mulist-key 时生成，官方加密格式
+└── playlists.plist     # 输入中存在 playlist 时生成
+```
+
+ext 关系只来自 catalog/JBHot defaults，不从 JBT 的 `info*` 猜测。如果 base
+引用的 ext JBT 不存在，导出会给出警告，并从 mulist 中省略这条 ext 关系。
+
+### `mulist decrypt`
+
+解密原版运行时 `mulist`，自动删除四字节随机前缀，输出明文 XML plist。
+
+```sh
+./build/BemaniTools mulist decrypt \
+  --input /path/to/mulist \
+  --output /path/to/mulist-dec.plist \
+  --key SHARED_KEY
+```
+
+### `mulist encrypt`
+
+验证输入是 plist array，自动添加四字节随机前缀，再生成官方 BFContainer。
+
+```sh
+./build/BemaniTools mulist encrypt \
+  --input /path/to/mulist.plist \
+  --output /path/to/mulist \
+  --key SHARED_KEY
+```
+
+### `jbt decrypt`
+
+将单个 JBT 转成成员未加密的 JBT ZIP，但不展开成员文件。官方包和明文包可直接
+读取；JBHot 包必须传 defaults plist。
+
+```sh
+./build/BemaniTools jbt decrypt \
+  --input song.jbt \
+  --output song-plain.jbt
+
+./build/BemaniTools jbt decrypt \
+  --input hot-song.jbt \
+  --output hot-song-plain.jbt \
+  --jbhot-plist /path/to/jbhot-defaults.plist
+```
+
+### `jbt encrypt`
+
+将明文 JBT 的成员重新打成官方 BFCodec 格式。输出仍是一个 `.jbt` 文件。
+
+```sh
+./build/BemaniTools jbt encrypt \
+  --input song-plain.jbt \
+  --output song-official.jbt
+```
+
+JBHot JBT 应先使用带 `--jbhot-plist` 的 `jbt decrypt` 转成明文，再执行
+`jbt encrypt`。
+
+### `jbt unpack`
+
+解密并展开单个 JBT。输出目录包含真正的 `info`/`infov2`/`infov3` plist、PNG、
+JBSQ、M4A 等资源。
+
+```sh
+./build/BemaniTools jbt unpack \
+  --input song.jbt \
+  --output work/song
+```
+
+JBHot 输入同样需要 `--jbhot-plist`。
+
+### `jbt pack`
+
+将一个展开目录重新打成 JBT。默认生成官方加密成员；传 `--plain` 才生成明文成员。
+工具保留目录中已有的 `info` 版本。
+
+```sh
+./build/BemaniTools jbt pack \
+  --input work/song \
+  --output song.jbt
+
+./build/BemaniTools jbt pack \
+  --input work/song \
+  --output song-plain.jbt \
+  --plain
+```
+
+### `jbt unpack-dir`
+
+递归查找输入目录中的 `.jbt`，批量解密并展开，同时保留相对目录结构。
+
+```sh
+./build/BemaniTools jbt unpack-dir \
+  --input /path/to/jbt-root \
+  --output /path/to/expanded-root \
+  [--jbhot-plist /path/to/jbhot-defaults.plist]
+```
+
+### `jbt pack-dir`
+
+递归查找包含 `info`、`infov2` 或 `infov3` 的展开目录，批量生成 JBT。默认官方
+加密；`--plain` 生成明文 JBT。
+
+```sh
+./build/BemaniTools jbt pack-dir \
+  --input /path/to/expanded-root \
+  --output /path/to/jbt-root
+```
+
+### `jbhot defaults-dump`
+
+解密 JBHot defaults plist 中存在的 `musicData`、`serverData`、`userData`、
+`offlineData`、`scoreData`，并合并 `musicDetail1...N`。每类数据分别输出格式化
+JSON。
+
+```sh
+./build/BemaniTools jbhot defaults-dump \
+  --input /path/to/jbhot-defaults.plist \
+  --output-dir /path/to/json-output
+```
+
+### `marker decrypt`
+
+将单个 Marker ZIP 转成成员为明文 PNG 的 ZIP，不展开文件。输入会自动识别官方
+BFCodec、JBHot `=JBHOT=` 和已经明文的成员。
+
+```sh
+./build/BemaniTools marker decrypt \
+  --input mk0048.zip \
+  --output mk0048-plain.zip
+```
+
+### `marker encrypt`
+
+读取明文、官方或 JBHot Marker ZIP，统一输出官方 BFCodec Marker ZIP。四字节
+前缀和 ZIP 尾部 MD5 都由工具自动生成。
+
+```sh
+./build/BemaniTools marker encrypt \
+  --input mk0048-plain.zip \
+  --output mk0048.zip
+```
+
+### `marker unpack`
+
+解密并展开单个 Marker ZIP，输出真正以 PNG 签名开头的帧文件。
+
+```sh
+./build/BemaniTools marker unpack \
+  --input mk0048.zip \
+  --output work/mk0048
+```
+
+### `marker pack`
+
+将展开的 PNG 帧目录打成官方加密 Marker ZIP。它已经包含 `marker encrypt` 的
+工作，不需要再加密第二次。
+
+```sh
+./build/BemaniTools marker pack \
+  --input work/mk0048 \
+  --output mk0048.zip
+```
+
+原版动画要求 88 个帧文件：`ma00`–`ma23`，以及 `h100`–`h115`、
+`h200`–`h215`、`h300`–`h315`、`h400`–`h415`。这些文件本身是 PNG，文件名
+没有 `.png` 后缀。
+
+### `marker unpack-dir`
+
+递归查找输入目录中的 Marker ZIP 并批量展开，保留相对目录结构。
+
+```sh
+./build/BemaniTools marker unpack-dir \
+  --input /path/to/marker-root \
+  --output /path/to/expanded-root
+```
+
+### `marker pack-dir`
+
+递归查找名为 `mk<数字>` 的展开目录并批量生成对应的官方加密 `.zip`。
+
+```sh
+./build/BemaniTools marker pack-dir \
+  --input /path/to/expanded-root \
+  --output /path/to/marker-root
+```
+
+### `marker build`
+
+合并完整 Marker 目录。每个输入目录只扫描根目录中实际存在的 `mk<数字>.zip`，
+Marker ID 不要求连续。
+
+```sh
+./build/BemaniTools marker build \
+  [--official /path/to/official-marker] \
+  [--jbhot /path/to/hot-marker] \
+  [--custom-dir /path/to/custom-marker] \
+  --output /path/to/output-marker \
+  --marker-list-output /path/to/output-marker/marker-list.plist
+```
+
+输入目录布局：
+
+```text
+CustomMarker/
+├── mk0048.zip
+├── mk0123.zip
+├── mapping.json                    # 仅发生 ID 冲突时需要
+└── banner/
+    ├── tm0048_banner.png
+    └── tm0123_banner.png
+```
+
+banner 是独立的 128×80 PNG，不放进 Marker ZIP。建议使用原版兼容的四位 ID
+`0000`–`9999`。缺 banner 时，默认仍保留 Marker ZIP 和列表项，但不生成不存在的
+banner，并以非零状态报告；`--strict` 会立即停止。
+
+输出始终统一为官方 BFCodec Marker ZIP。`--marker-list-output` 生成的是明文 XML
+plist，应直接放在最终 Marker 目录中。Tweak 读取该文件并调用游戏自己的
+`+[MarkerManager setMarkerList:]`；BemaniTools 不再生成加密的
+`PrefMarkerInfoList`。
+
+### `marker-list decrypt`
+
+只用于检查原版已有的 `PrefMarkerInfoList`。输入可以是 raw NSData 文件或 Base64
+文本，输出普通 XML plist。该命令没有对应的 encrypt 命令。
+
+```sh
+./build/BemaniTools marker-list decrypt \
+  --input /path/to/PrefMarkerInfoList \
+  --output /path/to/marker-list.plist
+```
+
+## 傻瓜流程一：合并官方和 JBHot 曲包到 OUT
+
+将下面的占位路径替换成自己的输入和输出目录。这一条命令完成：
+
+1. 加载官方 JBT 和官方目录内的 `mulist.plist`。
+2. 通过 JBHot defaults 解密并加载 Hot JBT、catalog 和 playlists。
+3. 按 Official → Hot 的优先级处理重复和 `mapping.json`。
+4. 输出官方加密 JBT、明文 `mulist.plist`、密钥为 `SHARED_KEY` 的加密 `mulist`，
+   以及存在时的 `playlists.plist`。
+
+```sh
+./build/BemaniTools dlc build \
+  --official "/path/to/official-jbt" \
+  --jbhot "/path/to/jbhot-jbt" \
+  --jbhot-plist "/path/to/jbhot-defaults.plist" \
+  --output "/path/to/OUT" \
+  --encrypt-jbt=true \
+  --mulist-key SHARED_KEY
+```
+
+如果官方 `mulist.plist` 不在官方 JBT 目录里，额外添加：
+
+```text
+--catalog "/path/to/official-mulist.plist"
+```
+
+要再加入自己的 JBT DLC，在同一命令末尾重复添加：
+
+```text
+--custom-dir "/path/to/custom-dlc-one" \
+--custom-dir "/path/to/custom-dlc-two"
+```
+
+每个 Custom 目录放自己的 JBT、可选 `mulist.plist`、`playlists.plist` 和发生冲突
+时的 `mapping.json`。
+
+## 傻瓜流程二：修改或添加 Marker
+
+解包一个 Marker：
+
+```sh
+./build/BemaniTools marker unpack \
+  --input "/path/to/mk0048.zip" \
+  --output "/path/to/MarkerWork/mk1234"
+```
+
+这里把参考 Marker 的帧放进新的空闲 ID `1234`。修改帧后，直接打回官方加密格式：
+
+```sh
+./build/BemaniTools marker pack \
+  --input "/path/to/MarkerWork/mk1234" \
+  --output "/path/to/MyMarkers/mk1234.zip"
+```
+
+如果只是原地替换已有的 `mk0048.zip`，可以把 `marker pack` 的输出直接写成新的
+`mk0048.zip`，原 Preferences 中已有的 Marker 列表不需要改变。只有添加新 ID
+时才需要下面的 `marker build` 和新 `marker-list.plist`。
+
+将 128×80 banner 放到：
+
+```text
+/path/to/MyMarkers/banner/tm1234_banner.png
+```
+
+最后把 Hot Marker 和自己的 Marker 合并到 OUT。生成的明文 plist 就放在 Marker
+目录根部：
+
+```sh
+./build/BemaniTools marker build \
+  --jbhot "/path/to/jbhot-marker" \
+  --custom-dir "/path/to/MyMarkers" \
+  --output "/path/to/OUT/marker" \
+  --marker-list-output "/path/to/OUT/marker/marker-list.plist"
+```
+
+最终目录应类似：
+
+```text
+OUT/marker/
+├── mk0001.zip
+├── mk0048.zip
+├── mk1234.zip
+├── mk9999.zip
+├── marker-list.plist
+└── banner/
+    ├── tm0001_banner.png
+    ├── tm0048_banner.png
+    ├── tm1234_banner.png
+    └── tm9999_banner.png
+```
+
+将整个目录部署到游戏的 Marker 目录即可。Tweak 会读取同目录的
+`marker-list.plist`，再交给原版 `MarkerManager` 保存到 Preferences。
