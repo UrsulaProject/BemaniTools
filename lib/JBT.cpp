@@ -776,36 +776,6 @@ namespace
         NormalizePackRelationships(result.packs);
     }
 
-    uint32_t AllocateID(uint32_t& next,
-                        uint32_t last,
-                        std::set<uint32_t>& used)
-    {
-        while (next <= last && used.contains(next))
-        {
-            if (next == std::numeric_limits<uint32_t>::max())
-                break;
-            ++next;
-        }
-        if (next > last || used.contains(next))
-            throw std::runtime_error("reserved conflict ID range is exhausted");
-        const uint32_t value = next;
-        used.insert(value);
-        if (next != std::numeric_limits<uint32_t>::max())
-            ++next;
-        return value;
-    }
-
-    int DLCTypePriority(bmt::DLCType type) noexcept
-    {
-        switch (type)
-        {
-            case bmt::DLCType::Official: return 0;
-            case bmt::DLCType::JBHot: return 1;
-            case bmt::DLCType::Custom: return 2;
-        }
-        return 3;
-    }
-
     bool SamePackContent(bmt::MusicPack& left, bmt::MusicPack& right)
     {
         if (left.resources.size() != right.resources.size())
@@ -872,6 +842,197 @@ namespace
             serialized.insert(serialized.begin(), plaintext.begin(), plaintext.begin() + 4);
         resource->second.bytes = std::move(serialized);
         resource->second.lazyLoader = {};
+    }
+
+    using IDMapping = std::map<uint32_t, uint32_t>;
+
+    uint32_t ParseMappingID(std::string_view value, std::string_view context)
+    {
+        const uint32_t id = ParseUInt(value);
+        if (!id)
+            throw std::runtime_error(std::string(context) + " must not be zero");
+        return id;
+    }
+
+    IDMapping LoadIDMapping(const fs::path& directory)
+    {
+        const fs::path path = directory / "mapping.json";
+        if (!fs::exists(path))
+            return {};
+        if (!fs::is_regular_file(path))
+            throw std::runtime_error("mapping.json is not a regular file: " + path.string());
+        auto root = ParseJson(ReadFile(path));
+        if (json_object_get_type(root.get()) != json_type_object)
+            throw std::runtime_error("mapping.json root must be an object: " + path.string());
+
+        IDMapping mapping;
+        std::set<uint32_t> targets;
+        json_object_object_foreach(root.get(), key, value)
+        {
+            const uint32_t oldID = ParseMappingID(key, "mapping.json source ID");
+            if (json_object_get_type(value) != json_type_int)
+                throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
+                                         " must be an integer");
+            const int64_t rawTarget = json_object_get_int64(value);
+            if (rawTarget <= 0 || rawTarget > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
+                                         " is outside the valid ID range");
+            const uint32_t newID = static_cast<uint32_t>(rawTarget);
+            if (oldID == newID)
+                throw std::runtime_error("mapping.json contains an identity mapping for " +
+                                         std::to_string(oldID));
+            if (!mapping.emplace(oldID, newID).second)
+                throw std::runtime_error("mapping.json contains the source ID more than once: " +
+                                         std::to_string(oldID));
+            if (!targets.insert(newID).second)
+                throw std::runtime_error("mapping.json maps multiple source IDs to " +
+                                         std::to_string(newID));
+        }
+        return mapping;
+    }
+
+    uint32_t MappedID(const IDMapping& mapping, uint32_t id)
+    {
+        const auto found = mapping.find(id);
+        return found == mapping.end() ? id : found->second;
+    }
+
+    void ApplyIDMapping(bmt::LoadResult& sourceResult,
+                        const IDMapping& mapping,
+                        const fs::path& sourceDirectory)
+    {
+        std::set<uint32_t> loadedIDs;
+        bmt::PackTable mappedPacks;
+        for (auto& [id, instances] : sourceResult.packs)
+        {
+            if (instances.size() != 1)
+                throw std::runtime_error("DLC contains multiple JBT files with ID " +
+                                         std::to_string(id));
+            auto pack = std::move(instances.front());
+            loadedIDs.insert(id);
+            const uint32_t finalID = MappedID(mapping, id);
+            pack.id = finalID;
+            pack.extID = MappedID(mapping, pack.extID);
+            pack.baseID = MappedID(mapping, pack.baseID);
+            if (finalID != id)
+            {
+                sourceResult.remaps.push_back({pack.sourcePath, id, finalID});
+                RewriteInfoID(pack);
+            }
+            if (!mappedPacks.emplace(finalID, std::vector<bmt::MusicPack>{std::move(pack)}).second)
+                throw std::runtime_error("mapping.json causes multiple files to use ID " +
+                                         std::to_string(finalID));
+        }
+        for (const auto& [oldID, newID] : mapping)
+        {
+            if (!loadedIDs.contains(oldID))
+                throw std::runtime_error("mapping.json in " + sourceDirectory.string() +
+                                         " references missing file ID " + std::to_string(oldID));
+        }
+        sourceResult.packs = std::move(mappedPacks);
+        for (auto& playlist : sourceResult.playlists)
+        {
+            for (auto& id : playlist.musicIDs)
+                id = MappedID(mapping, id);
+        }
+    }
+
+    std::vector<std::vector<uint32_t>> RelationshipComponents(const bmt::PackTable& packs)
+    {
+        std::map<uint32_t, uint32_t> parent;
+        for (const auto& [id, instances] : packs)
+            parent[id] = id;
+        auto find = [&](uint32_t id)
+        {
+            uint32_t root = id;
+            while (parent.at(root) != root)
+                root = parent.at(root);
+            while (parent.at(id) != id)
+            {
+                const uint32_t next = parent.at(id);
+                parent[id] = root;
+                id = next;
+            }
+            return root;
+        };
+        auto unite = [&](uint32_t left, uint32_t right)
+        {
+            const uint32_t leftRoot = find(left);
+            const uint32_t rightRoot = find(right);
+            if (leftRoot != rightRoot)
+                parent[rightRoot] = leftRoot;
+        };
+        for (const auto& [id, instances] : packs)
+        {
+            const auto& pack = instances.front();
+            if (pack.extID && parent.contains(pack.extID))
+                unite(id, pack.extID);
+            if (pack.baseID && parent.contains(pack.baseID))
+                unite(id, pack.baseID);
+        }
+        std::map<uint32_t, std::vector<uint32_t>> grouped;
+        for (const auto& [id, root] : parent)
+            grouped[find(id)].push_back(id);
+        std::vector<std::vector<uint32_t>> output;
+        output.reserve(grouped.size());
+        for (auto& [root, ids] : grouped)
+            output.push_back(std::move(ids));
+        return output;
+    }
+
+    void MergeDLC(bmt::LoadResult& result,
+                  bmt::LoadResult& sourceResult,
+                  const fs::path& sourceDirectory)
+    {
+        for (const auto& component : RelationshipComponents(sourceResult.packs))
+        {
+            bool anyCollision = false;
+            bool allDuplicates = true;
+            for (const uint32_t id : component)
+            {
+                const auto existing = result.packs.find(id);
+                if (existing == result.packs.end())
+                {
+                    allDuplicates = false;
+                    continue;
+                }
+                anyCollision = true;
+                auto& incoming = sourceResult.packs.at(id).front();
+                auto& winner = existing->second.front();
+                if (winner.extID != incoming.extID || winner.baseID != incoming.baseID ||
+                    !SamePackContent(winner, incoming))
+                    allDuplicates = false;
+            }
+            if (anyCollision && !allDuplicates)
+            {
+                const auto conflicting = std::find_if(component.begin(), component.end(),
+                    [&](uint32_t id) { return result.packs.contains(id); });
+                const uint32_t id = conflicting == component.end() ? component.front() : *conflicting;
+                const auto& pack = sourceResult.packs.at(id).front();
+                const bool wasMapped = pack.originalID != pack.id;
+                if (wasMapped)
+                    throw std::runtime_error("mapping.json target " + std::to_string(id) +
+                                             " is already occupied while loading " +
+                                             sourceDirectory.string());
+                throw std::runtime_error("conflicting ID " + std::to_string(id) + " from " +
+                                         pack.sourcePath.string() +
+                                         " requires an entry in " +
+                                         (sourceDirectory / "mapping.json").string());
+            }
+            if (anyCollision)
+            {
+                result.droppedDuplicates += component.size();
+                continue;
+            }
+            for (const uint32_t id : component)
+                result.packs.emplace(id, std::move(sourceResult.packs.at(id)));
+        }
+        result.remaps.insert(result.remaps.end(),
+                             std::make_move_iterator(sourceResult.remaps.begin()),
+                             std::make_move_iterator(sourceResult.remaps.end()));
+        result.playlists.insert(result.playlists.end(),
+                                std::make_move_iterator(sourceResult.playlists.begin()),
+                                std::make_move_iterator(sourceResult.playlists.end()));
     }
 
     std::string PackFileName(uint32_t id)
@@ -1225,7 +1386,6 @@ namespace bmt
             throw std::invalid_argument("at least one DLC source is required");
         size_t officialCount = 0;
         size_t jbhotCount = 0;
-        std::vector<std::pair<uint32_t, uint32_t>> customRanges;
         std::set<fs::path> sourceDirectories;
         for (const auto& source : sources)
         {
@@ -1236,17 +1396,6 @@ namespace bmt
                 throw std::invalid_argument("the same DLC directory was specified more than once");
             officialCount += source.type == DLCType::Official;
             jbhotCount += source.type == DLCType::JBHot;
-            if (source.type == DLCType::Custom)
-            {
-                if (!source.firstID || source.firstID > source.lastID)
-                    throw std::invalid_argument("invalid Custom DLC ID range");
-                for (const auto& [first, last] : customRanges)
-                {
-                    if (source.firstID <= last && first <= source.lastID)
-                        throw std::invalid_argument("Custom DLC ID ranges overlap");
-                }
-                customRanges.emplace_back(source.firstID, source.lastID);
-            }
         }
         if (officialCount > 1 || jbhotCount > 1)
             throw std::invalid_argument("only one Official and one JBHot DLC source are allowed");
@@ -1258,7 +1407,6 @@ namespace bmt
         if (options.jbhotDefaultsPlist)
         {
             jbhotDefaults = LoadJBHotDefaults(*options.jbhotDefaultsPlist);
-            result.playlists = jbhotDefaults.playlists;
             result.catalog.reserve(jbhotDefaults.music.size());
             for (const auto& [id, entry] : jbhotDefaults.music)
                 result.catalog.push_back(entry.catalog);
@@ -1266,18 +1414,6 @@ namespace bmt
                       [](const auto& left, const auto& right) { return left.id < right.id; });
         }
         auto musicData = std::make_shared<JBHotMap>(std::move(jbhotDefaults.music));
-
-        for (const auto& source : sources)
-        {
-            const fs::path companion = source.directory / "playlists.plist";
-            if (source.type == DLCType::Official && fs::is_regular_file(companion))
-            {
-                auto officialPlaylists = LoadPlaylists(companion);
-                result.playlists.insert(result.playlists.begin(),
-                                        std::make_move_iterator(officialPlaylists.begin()),
-                                        std::make_move_iterator(officialPlaylists.end()));
-            }
-        }
 
         std::vector<CatalogEntry> officialCatalog;
         std::unordered_map<size_t, CatalogMap> catalogsByDLC;
@@ -1306,19 +1442,33 @@ namespace bmt
         for (size_t sourceIndex = 0; sourceIndex < sources.size(); ++sourceIndex)
         {
             const auto& source = sources[sourceIndex];
+            LoadResult sourceResult;
+            if (source.type == DLCType::JBHot)
+                sourceResult.playlists = jbhotDefaults.playlists;
+            else
+            {
+                const fs::path companion = source.directory / "playlists.plist";
+                if (fs::is_regular_file(companion))
+                    sourceResult.playlists = LoadPlaylists(companion);
+            }
+            for (auto& playlist : sourceResult.playlists)
+            {
+                playlist.dlcType = source.type;
+                playlist.dlcOrder = sourceIndex;
+            }
             for (const auto& path : ExpandInputs({source.directory}))
             {
                 try
                 {
                     auto pack = LoadOnePack(path, options, musicData);
+                    const uint32_t fileID = ParseMappingID(path.stem().string(), "JBT filename ID");
+                    if (fileID != pack.originalID)
+                        throw std::runtime_error("JBT filename ID " + std::to_string(fileID) +
+                                                 " does not match info ID " +
+                                                 std::to_string(pack.originalID));
                     pack.dlcType = source.type;
                     pack.dlcOrder = sourceIndex;
-                    if (source.type == DLCType::Custom)
-                    {
-                        pack.customFirstID = source.firstID;
-                        pack.customLastID = source.lastID;
-                    }
-                    result.packs[pack.id].push_back(std::move(pack));
+                    sourceResult.packs[pack.id].push_back(std::move(pack));
                 }
                 catch (const std::exception& error)
                 {
@@ -1327,221 +1477,16 @@ namespace bmt
                         throw;
                 }
             }
+            std::unordered_map<size_t, CatalogMap> sourceCatalog;
+            if (const auto found = catalogsByDLC.find(sourceIndex); found != catalogsByDLC.end())
+                sourceCatalog.emplace(sourceIndex, found->second);
+            ApplyCatalog(sourceResult, officialCatalog, sourceCatalog, *musicData,
+                         options.catalogPlist.has_value());
+            const auto mapping = LoadIDMapping(source.directory);
+            ApplyIDMapping(sourceResult, mapping, source.directory);
+            MergeDLC(result, sourceResult, source.directory);
         }
-        ApplyCatalog(result, officialCatalog, catalogsByDLC, *musicData,
-                     options.catalogPlist.has_value());
         return result;
-    }
-
-    std::vector<IDRemap> ResolveConflicts(LoadResult& result, const ResolveOptions& options)
-    {
-        if (!options.firstReservedID || options.firstReservedID > options.lastReservedID)
-            throw std::invalid_argument("invalid reserved conflict ID range");
-
-        auto& packs = result.packs;
-        NormalizePackRelationships(packs);
-        std::vector<MusicPack> flat;
-        std::vector<uint32_t> oldIDs;
-        std::unordered_map<uint32_t, std::vector<size_t>> byOriginalID;
-        for (auto& [id, instances] : packs)
-        {
-            for (auto& pack : instances)
-            {
-                const size_t index = flat.size();
-                byOriginalID[id].push_back(index);
-                oldIDs.push_back(id);
-                flat.push_back(std::move(pack));
-            }
-        }
-
-        auto priorityLess = [&](size_t left, size_t right)
-        {
-            const auto& lhs = flat[left];
-            const auto& rhs = flat[right];
-            const int lhsPriority = DLCTypePriority(lhs.dlcType);
-            const int rhsPriority = DLCTypePriority(rhs.dlcType);
-            if (lhsPriority != rhsPriority)
-                return lhsPriority < rhsPriority;
-            if (lhs.dlcOrder != rhs.dlcOrder)
-                return lhs.dlcOrder < rhs.dlcOrder;
-            return lhs.sourcePath < rhs.sourcePath;
-        };
-
-        auto relationPeer = [&](size_t index) -> std::optional<size_t>
-        {
-            const auto& pack = flat[index];
-            const uint32_t peerID = pack.extID ? pack.extID : pack.baseID;
-            const auto candidates = byOriginalID.find(peerID);
-            if (!peerID || candidates == byOriginalID.end())
-                return std::nullopt;
-            for (const size_t candidate : candidates->second)
-            {
-                if (flat[candidate].dlcType == pack.dlcType &&
-                    flat[candidate].dlcOrder == pack.dlcOrder)
-                    return candidate;
-            }
-            return std::nullopt;
-        };
-
-        std::vector<bool> active(flat.size(), true);
-        for (auto& [id, indices] : byOriginalID)
-        {
-            std::sort(indices.begin(), indices.end(), priorityLess);
-            std::vector<size_t> kept;
-            for (const size_t candidate : indices)
-            {
-                for (const size_t earlier : kept)
-                {
-                    auto& winner = flat[earlier];
-                    auto& duplicate = flat[candidate];
-                    const bool compatibleRelations =
-                        (!winner.extID || !duplicate.extID || winner.extID == duplicate.extID) &&
-                        (!winner.baseID || !duplicate.baseID || winner.baseID == duplicate.baseID);
-                    if (!compatibleRelations || !SamePackContent(winner, duplicate))
-                        continue;
-                    const auto winnerPeer = relationPeer(earlier);
-                    const auto duplicatePeer = relationPeer(candidate);
-                    if (winnerPeer && duplicatePeer &&
-                        !SamePackContent(flat[*winnerPeer], flat[*duplicatePeer]))
-                        continue;
-                    if (!winner.extID)
-                        winner.extID = duplicate.extID;
-                    if (!winner.baseID)
-                        winner.baseID = duplicate.baseID;
-                    active[candidate] = false;
-                    ++result.droppedDuplicates;
-                    break;
-                }
-                if (active[candidate])
-                    kept.push_back(candidate);
-            }
-        }
-
-        std::vector<size_t> component(flat.size());
-        for (size_t index = 0; index < flat.size(); ++index)
-            component[index] = index;
-        std::set<size_t> claimedExtensions;
-        for (size_t baseIndex = 0; baseIndex < flat.size(); ++baseIndex)
-        {
-            if (!active[baseIndex] || !flat[baseIndex].extID)
-                continue;
-            const auto candidates = byOriginalID.find(flat[baseIndex].extID);
-            if (candidates == byOriginalID.end())
-                continue;
-            for (const size_t candidate : candidates->second)
-            {
-                if (!active[candidate] || claimedExtensions.contains(candidate))
-                    continue;
-                if (flat[candidate].dlcType == flat[baseIndex].dlcType &&
-                    flat[candidate].dlcOrder == flat[baseIndex].dlcOrder)
-                {
-                    component[candidate] = baseIndex;
-                    claimedExtensions.insert(candidate);
-                    break;
-                }
-            }
-        }
-
-        std::set<size_t> remapComponents;
-        for (const auto& [id, indices] : byOriginalID)
-        {
-            std::vector<size_t> remaining;
-            for (const size_t index : indices)
-            {
-                if (active[index])
-                    remaining.push_back(index);
-            }
-            std::sort(remaining.begin(), remaining.end(), priorityLess);
-            const bool hasOfficial = !remaining.empty() &&
-                flat[remaining.front()].dlcType == DLCType::Official;
-            for (size_t position = 1; position < remaining.size(); ++position)
-            {
-                if (flat[remaining[position]].dlcType == DLCType::Official)
-                    throw std::runtime_error("non-identical Official packs have the same ID " +
-                                             std::to_string(id));
-                if (flat[remaining[position]].dlcType == DLCType::JBHot && !hasOfficial)
-                    throw std::runtime_error("non-identical JBHot packs have the same ID " +
-                                             std::to_string(id));
-                remapComponents.insert(component[remaining[position]]);
-            }
-        }
-
-        std::set<uint32_t> used;
-        for (size_t index = 0; index < flat.size(); ++index)
-        {
-            if (active[index])
-                used.insert(flat[index].id);
-        }
-        uint32_t jbhotNext = options.firstReservedID;
-        std::unordered_map<size_t, uint32_t> customNext;
-        std::vector<IDRemap> remaps;
-        std::unordered_map<size_t, std::vector<size_t>> members;
-        for (size_t index = 0; index < component.size(); ++index)
-        {
-            if (active[index])
-                members[component[index]].push_back(index);
-        }
-        for (const size_t root : remapComponents)
-        {
-            auto& owner = flat[root];
-            if (owner.dlcType == DLCType::Official)
-                throw std::runtime_error("Official DLC IDs cannot be remapped");
-            uint32_t* next = nullptr;
-            uint32_t last = 0;
-            if (owner.dlcType == DLCType::JBHot)
-            {
-                next = &jbhotNext;
-                last = options.lastReservedID;
-            }
-            else
-            {
-                if (!owner.customFirstID || owner.customFirstID > owner.customLastID)
-                    throw std::runtime_error("Custom DLC has no valid ID range");
-                auto position = customNext.try_emplace(owner.dlcOrder, owner.customFirstID).first;
-                next = &position->second;
-                last = owner.customLastID;
-            }
-            for (const size_t index : members[root])
-            {
-                const uint32_t oldID = flat[index].id;
-                flat[index].id = AllocateID(*next, last, used);
-                remaps.push_back({flat[index].sourcePath, oldID, flat[index].id});
-            }
-            if (members[root].size() == 2)
-            {
-                const size_t first = members[root][0];
-                const size_t second = members[root][1];
-                const size_t base = flat[first].extID ? first : second;
-                const size_t extension = base == first ? second : first;
-                flat[base].extID = flat[extension].id;
-                flat[extension].baseID = flat[base].id;
-            }
-        }
-
-        std::unordered_map<uint32_t, uint32_t> jbhotIDs;
-        for (size_t index = 0; index < flat.size(); ++index)
-        {
-            if (active[index] && flat[index].dlcType == DLCType::JBHot)
-                jbhotIDs.try_emplace(oldIDs[index], flat[index].id);
-        }
-        for (auto& playlist : result.playlists)
-        {
-            if (playlist.dlcType != DLCType::JBHot)
-                continue;
-            for (auto& id : playlist.musicIDs)
-            {
-                if (const auto remapped = jbhotIDs.find(id); remapped != jbhotIDs.end())
-                    id = remapped->second;
-            }
-        }
-
-        packs.clear();
-        for (size_t index = 0; index < flat.size(); ++index)
-        {
-            if (active[index])
-                packs[flat[index].id].push_back(std::move(flat[index]));
-        }
-        return remaps;
     }
 
     static void ExportPacksImpl(PackTable& packs,

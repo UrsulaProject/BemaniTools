@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,33 +37,12 @@ namespace
             << "  --jbhot <directory>        JBHot DLC directory (once)\n"
             << "  --jbhot-plist=<path>       encrypted JBHot NSUserDefaults plist\n"
             << "  --custom-dir=<directory>   Custom DLC directory (repeatable)\n"
-            << "  --custom-range=<first>,<last>  range for preceding Custom DLC\n"
             << "  --catalog <path>           official plaintext mulist plist\n"
-            << "  --resolve <first> <last>   JBHot conflict ID range\n"
             << "  --export <directory>       write JBTs, mulist.plist, and playlists.plist\n"
             << "  --encrypt-jbt=true|false   encrypt output JBT members (default: true)\n"
             << "  --separate-output          place JBTs in per-DLC subdirectories\n"
             << "  --mulist-key=<key>         also write encrypted mulist using this raw key\n"
             << "  --playlist-export <path>   write merged playlists.plist without exporting JBTs\n";
-    }
-
-    uint32_t ParseID(const char* text)
-    {
-        size_t consumed = 0;
-        const auto value = std::stoull(text, &consumed, 10);
-        if (text[consumed] != '\0' || value > std::numeric_limits<uint32_t>::max())
-            throw std::runtime_error(std::string("invalid ID: ") + text);
-        return static_cast<uint32_t>(value);
-    }
-
-    std::pair<uint32_t, uint32_t> ParseRange(std::string_view text)
-    {
-        const auto comma = text.find(',');
-        if (comma == std::string_view::npos || text.find(',', comma + 1) != std::string_view::npos)
-            throw std::runtime_error("Custom range must be <first>,<last>");
-        const std::string first(text.substr(0, comma));
-        const std::string last(text.substr(comma + 1));
-        return {ParseID(first.c_str()), ParseID(last.c_str())};
     }
 
     bool ParseBoolean(std::string_view value)
@@ -106,9 +84,7 @@ int main(int argc, char** argv)
         }
 
         bmt::LoadOptions options;
-        bmt::ResolveOptions resolveOptions;
         bmt::ExportOptions exportOptions;
-        bool resolve = false;
         std::optional<fs::path> exportDirectory;
         std::optional<fs::path> playlistExport;
         std::optional<fs::path> officialDirectory;
@@ -141,19 +117,7 @@ int main(int argc, char** argv)
                 options.jbhotDefaultsPlist = argument.substr(14);
             else if (argument == "--jbhot-plist") options.jbhotDefaultsPlist = requireValue();
             else if (argument.starts_with("--custom-dir="))
-            {
-                if (!customSources.empty() && !customSources.back().firstID)
-                    throw std::runtime_error("the preceding --custom-dir has no --custom-range");
-                customSources.push_back({bmt::DLCType::Custom, argument.substr(13), 0, 0});
-            }
-            else if (argument.starts_with("--custom-range="))
-            {
-                if (customSources.empty() || customSources.back().firstID)
-                    throw std::runtime_error("--custom-range must follow one --custom-dir");
-                const auto [first, last] = ParseRange(std::string_view(argument).substr(15));
-                customSources.back().firstID = first;
-                customSources.back().lastID = last;
-            }
+                customSources.push_back({bmt::DLCType::Custom, argument.substr(13)});
             else if (argument == "--catalog") options.catalogPlist = requireValue();
             else if (argument == "--export") exportDirectory = requireValue();
             else if (argument == "--playlist-export") playlistExport = requireValue();
@@ -164,21 +128,11 @@ int main(int argc, char** argv)
                 exportOptions.mulistKey = argument.substr(13);
             else if (argument == "--mulist-key")
                 exportOptions.mulistKey = requireValue().string();
-            else if (argument == "--resolve")
-            {
-                if (index + 2 >= argc)
-                    throw std::runtime_error("--resolve requires first and last IDs");
-                resolveOptions.firstReservedID = ParseID(argv[++index]);
-                resolveOptions.lastReservedID = ParseID(argv[++index]);
-                resolve = true;
-            }
             else if (argument.starts_with("--"))
                 throw std::runtime_error("unknown option " + argument);
             else
                 throw std::runtime_error("unexpected positional input " + argument);
         }
-        if (!customSources.empty() && !customSources.back().firstID)
-            throw std::runtime_error("the final --custom-dir has no --custom-range");
         std::vector<bmt::DLCSource> sources;
         if (officialDirectory)
             sources.push_back({bmt::DLCType::Official, *officialDirectory});
@@ -207,12 +161,9 @@ int main(int argc, char** argv)
         for (const auto& diagnostic : result.diagnostics)
             std::cerr << diagnostic.path << ": " << diagnostic.message << '\n';
 
-        if (resolve || exportDirectory)
-        {
-            const auto remaps = bmt::ResolveConflicts(result, resolveOptions);
-            std::cout << "dropped " << result.droppedDuplicates
-                      << " identical packs; remapped " << remaps.size() << " packs\n";
-        }
+        std::cout << "dropped " << result.droppedDuplicates
+                  << " identical packs; remapped " << result.remaps.size()
+                  << " packs from mapping.json\n";
         if (exportDirectory)
         {
             const size_t warningStart = result.warnings.size();

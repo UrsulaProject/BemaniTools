@@ -37,17 +37,15 @@ from the NSUserDefaults plist:
   --jbhot-plist=/path/to/jp.konmai.jbhot2.T2SSHXUSCG.plist
 ```
 
-Custom DLC directories accept either BF-encrypted or plaintext JBTs. Every Custom
-DLC must be followed by its own non-overlapping allocation range:
+Custom DLC directories accept either BF-encrypted or plaintext JBTs:
 
 ```sh
 ./build/BemaniTools load \
   --official /path/to/official-packs \
   --jbhot /path/to/jbhot-packs \
   --jbhot-plist=/path/to/jbhot-defaults.plist \
-  --custom-dir=/path/to/custom-one --custom-range=1100,2200 \
-  --custom-dir=/path/to/custom-two --custom-range=2211,2300 \
-  --resolve 600000000 899999999 \
+  --custom-dir=/path/to/custom-one \
+  --custom-dir=/path/to/custom-two \
   --encrypt-jbt=true \
   --separate-output \
   --mulist-key=SHARED_KEY \
@@ -66,17 +64,31 @@ The merged `mulist`, `mulist.plist`, and `playlists.plist` remain in the output
 root. This organized layout is intended for staging; the game itself expects
 the JBT files directly in its `Documents` directory.
 
-An Official DLC companion `playlists.plist` is merged before the playlists from
-JBHot `serverData`. Conflict resolution remaps only the JBHot playlist IDs. Use
+An Official or Custom DLC companion `playlists.plist` is merged with the playlists
+from JBHot `serverData`. ID mappings are also applied to playlist entries from the
+same DLC. Use
 `--playlist-export /path/to/playlists.plist` to write the merged official
 `LIST`/`NAME`/`PLID` format without exporting JBTs. Existing 32-character hex
 PLIDs are preserved; a random PLID is generated for source playlists without one.
 
-Official IDs never change. JBHot IDs only move when they conflict with a
-non-identical Official pack. A conflicting Custom component uses that Custom DLC's
-own range. Before remapping, decrypted JBT members are compared byte-for-byte and
-later identical instances are dropped with priority Official, JBHot, then Custom
-command-line order. JBHot playlists follow any resulting JBHot ID changes.
+Each DLC is resolved as it is loaded. If an incoming file conflicts with a
+different pack already loaded, its directory must contain a `mapping.json` object:
+
+```json
+{
+  "30000123": 600000000,
+  "30000124": 600000001
+}
+```
+
+Keys are IDs from the JBT filenames and values are the final IDs. Mappings are
+always applied, including to JBT `info`, base/ext relationships, and playlists, so
+the result is stable when a DLC is loaded by itself. Stale keys, duplicate targets,
+identity mappings, filename/info mismatches, missing mappings, and occupied mapping
+targets are rejected. Related base/ext packs are merged atomically. Decrypted JBT
+members are compared byte-for-byte; a later identical relationship component is
+dropped, so CLI priority is Official, JBHot, then Custom command-line order. No IDs
+are generated automatically.
 
 The library API is declared in `include/Bemani/JBT.h`. `LoadResult::packs` is a
 `std::map<uint32_t, std::vector<MusicPack>>`; lazy loading is the default and eager loading is available through `LoadOptions`.

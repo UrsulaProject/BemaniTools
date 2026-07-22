@@ -88,8 +88,6 @@ namespace bmt
         CatalogSource catalogSource = CatalogSource::None;
         DLCType dlcType = DLCType::Custom;
         size_t dlcOrder = 0;
-        uint32_t customFirstID = 0;
-        uint32_t customLastID = 0;
         InfoRevision infoRevision = InfoRevision::InfoV2;
         std::string infoMember;
         std::string name;
@@ -119,6 +117,7 @@ namespace bmt
         std::string name;
         std::vector<uint32_t> musicIDs;
         DLCType dlcType = DLCType::JBHot;
+        size_t dlcOrder = 0;
     };
 
     struct Diagnostic
@@ -139,31 +138,6 @@ namespace bmt
     {
         DLCType type = DLCType::Custom;
         std::filesystem::path directory;
-        uint32_t firstID = 0;
-        uint32_t lastID = 0;
-    };
-
-    struct LoadResult
-    {
-        PackTable packs;
-        std::vector<CatalogEntry> catalog;
-        std::vector<Playlist> playlists;
-        std::vector<Diagnostic> diagnostics;
-        std::vector<Diagnostic> warnings;
-        size_t droppedDuplicates = 0;
-    };
-
-    struct ResolveOptions
-    {
-        uint32_t firstReservedID = 600000000;
-        uint32_t lastReservedID = 899999999;
-    };
-
-    struct ExportOptions
-    {
-        bool encryptJBT = true;
-        std::optional<std::string> mulistKey;
-        bool separateByDLC = false;
     };
 
     struct IDRemap
@@ -173,10 +147,26 @@ namespace bmt
         uint32_t newID = 0;
     };
 
+    struct LoadResult
+    {
+        PackTable packs;
+        std::vector<CatalogEntry> catalog;
+        std::vector<Playlist> playlists;
+        std::vector<Diagnostic> diagnostics;
+        std::vector<Diagnostic> warnings;
+        std::vector<IDRemap> remaps;
+        size_t droppedDuplicates = 0;
+    };
+
+    struct ExportOptions
+    {
+        bool encryptJBT = true;
+        std::optional<std::string> mulistKey;
+        bool separateByDLC = false;
+    };
+
     LoadResult LoadPacks(const std::vector<DLCSource>& sources,
                          const LoadOptions& options = {});
-    std::vector<IDRemap> ResolveConflicts(LoadResult& result,
-                                          const ResolveOptions& options = {});
     void ExportPacks(LoadResult& result,
                      const std::filesystem::path& outputDirectory,
                      const ExportOptions& options = {});

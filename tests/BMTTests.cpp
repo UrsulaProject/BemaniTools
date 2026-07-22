@@ -14,6 +14,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -24,6 +25,16 @@ namespace
         if (!input)
             throw std::runtime_error("cannot open test file " + path.string());
         return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    }
+
+    void WriteText(const std::filesystem::path& path, std::string_view text)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output)
+            throw std::runtime_error("cannot create test file " + path.string());
+        output.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!output)
+            throw std::runtime_error("cannot write test file " + path.string());
     }
 
     bool HasJBTDigest(const std::filesystem::path& path)
@@ -60,114 +71,6 @@ int main()
     invalid.back() ^= 1;
     assert(!bmt::IsBFContainer(invalid));
 
-    bmt::LoadResult conflict;
-    bmt::MusicPack first;
-    first.originalID = first.id = 100;
-    first.sourcePath = "/one/000000100.jbt";
-    first.dlcType = bmt::DLCType::Official;
-    SetContent(first, {1});
-    bmt::MusicPack second = first;
-    second.sourcePath = "/two/000000100.jbt";
-    second.dlcType = bmt::DLCType::JBHot;
-    SetContent(second, {2});
-    conflict.packs[100] = {first, second};
-    const auto remaps = bmt::ResolveConflicts(conflict, {600000000, 600000010});
-    assert(remaps.size() == 1);
-    assert(conflict.packs.contains(100));
-    assert(conflict.packs.contains(600000000));
-
-    bmt::LoadResult hotCustomConflict;
-    bmt::MusicPack stableHot = second;
-    stableHot.id = stableHot.originalID = 300;
-    stableHot.sourcePath = "/hot/000000300.jbt";
-    bmt::MusicPack rangedCustom = stableHot;
-    rangedCustom.dlcType = bmt::DLCType::Custom;
-    rangedCustom.dlcOrder = 1;
-    rangedCustom.customFirstID = 1100;
-    rangedCustom.customLastID = 1200;
-    rangedCustom.sourcePath = "/custom/000000300.jbt";
-    SetContent(rangedCustom, {3});
-    hotCustomConflict.packs[300] = {rangedCustom, stableHot};
-    const auto hotCustomRemaps = bmt::ResolveConflicts(hotCustomConflict);
-    assert(hotCustomRemaps.size() == 1);
-    assert(hotCustomConflict.packs.contains(300));
-    assert(hotCustomConflict.packs.at(300).front().dlcType == bmt::DLCType::JBHot);
-    assert(hotCustomConflict.packs.contains(1100));
-
-    bmt::LoadResult paired;
-    bmt::MusicPack baseOne;
-    baseOne.originalID = baseOne.id = 100;
-    baseOne.extID = 200;
-    baseOne.sourcePath = "/one/000000100.jbt";
-    baseOne.dlcType = bmt::DLCType::Official;
-    SetContent(baseOne, {1});
-    bmt::MusicPack baseTwo = baseOne;
-    baseTwo.sourcePath = "/two/000000100.jbt";
-    baseTwo.dlcType = bmt::DLCType::Custom;
-    baseTwo.dlcOrder = 1;
-    baseTwo.customFirstID = 600000000;
-    baseTwo.customLastID = 600000010;
-    SetContent(baseTwo, {2});
-    bmt::MusicPack extOne;
-    extOne.originalID = extOne.id = 200;
-    extOne.baseID = 100;
-    extOne.sourcePath = "/one/000000200.jbt";
-    extOne.dlcType = bmt::DLCType::Official;
-    SetContent(extOne, {3});
-    bmt::MusicPack extTwo = extOne;
-    extTwo.sourcePath = "/two/000000200.jbt";
-    extTwo.dlcType = bmt::DLCType::Custom;
-    extTwo.dlcOrder = 1;
-    extTwo.customFirstID = 600000000;
-    extTwo.customLastID = 600000010;
-    SetContent(extTwo, {4});
-    paired.packs[100] = {baseOne, baseTwo};
-    paired.packs[200] = {extOne, extTwo};
-    const auto pairRemaps = bmt::ResolveConflicts(paired, {600000000, 600000010});
-    assert(pairRemaps.size() == 2);
-    assert(paired.packs.at(600000000).front().extID == 600000001);
-    assert(paired.packs.at(600000001).front().baseID == 600000000);
-
-    bmt::LoadResult mixedPair;
-    bmt::MusicPack mixedOfficialBase = baseOne;
-    mixedOfficialBase.dlcType = bmt::DLCType::Official;
-    bmt::MusicPack mixedHotBase = baseTwo;
-    mixedHotBase.dlcType = bmt::DLCType::JBHot;
-    mixedHotBase.customFirstID = mixedHotBase.customLastID = 0;
-    bmt::MusicPack mixedOfficialExtension = extOne;
-    mixedOfficialExtension.dlcType = bmt::DLCType::Official;
-    bmt::MusicPack mixedHotExtension = extTwo;
-    mixedHotExtension.dlcType = bmt::DLCType::JBHot;
-    mixedHotExtension.customFirstID = mixedHotExtension.customLastID = 0;
-    SetContent(mixedHotExtension, {3});
-    mixedPair.packs[100] = {mixedOfficialBase, mixedHotBase};
-    mixedPair.packs[200] = {mixedOfficialExtension, mixedHotExtension};
-    const auto mixedRemaps = bmt::ResolveConflicts(mixedPair, {600000000, 600000010});
-    assert(mixedRemaps.size() == 2);
-    assert(mixedPair.droppedDuplicates == 0);
-    assert(mixedPair.packs.at(600000000).front().extID == 600000001);
-    assert(mixedPair.packs.at(600000001).front().baseID == 600000000);
-
-    bmt::LoadResult reverseOnlyPair;
-    bmt::MusicPack reverseBase = baseOne;
-    reverseBase.extID = 0;
-    bmt::MusicPack reverseExtension = extOne;
-    reverseOnlyPair.packs[100] = {reverseBase};
-    reverseOnlyPair.packs[200] = {reverseExtension};
-    assert(bmt::ResolveConflicts(reverseOnlyPair).empty());
-    assert(reverseOnlyPair.packs.at(100).front().extID == 200);
-    assert(reverseOnlyPair.packs.at(200).front().baseID == 100);
-
-    bmt::LoadResult identical;
-    bmt::MusicPack identicalOfficial = first;
-    bmt::MusicPack identicalHot = first;
-    identicalHot.dlcType = bmt::DLCType::JBHot;
-    identicalHot.sourcePath = "/hot/000000100.jbt";
-    identical.packs[100] = {identicalHot, identicalOfficial};
-    assert(bmt::ResolveConflicts(identical).empty());
-    assert(identical.droppedDuplicates == 1);
-    assert(identical.packs.at(100).front().dlcType == bmt::DLCType::Official);
-
     bmt::LoadResult playlistConflict;
     bmt::MusicPack officialBase;
     officialBase.originalID = officialBase.id = 100;
@@ -176,10 +79,12 @@ int main()
     officialBase.dlcType = bmt::DLCType::Official;
     SetContent(officialBase, {1});
     bmt::MusicPack hotBase = officialBase;
+    hotBase.originalID = 100;
+    hotBase.id = 600000000;
     hotBase.sourcePath = "/hot/000000100.jbt";
     hotBase.catalogSource = bmt::CatalogSource::JBHot;
     hotBase.dlcType = bmt::DLCType::JBHot;
-    hotBase.extID = 200;
+    hotBase.extID = 600000001;
     SetContent(hotBase, {2});
     bmt::MusicPack officialExtension;
     officialExtension.originalID = officialExtension.id = 200;
@@ -188,18 +93,20 @@ int main()
     officialExtension.dlcType = bmt::DLCType::Official;
     SetContent(officialExtension, {3});
     bmt::MusicPack hotExtension = officialExtension;
+    hotExtension.originalID = 200;
+    hotExtension.id = 600000001;
     hotExtension.sourcePath = "/hot/000000200.jbt";
     hotExtension.catalogSource = bmt::CatalogSource::JBHot;
     hotExtension.dlcType = bmt::DLCType::JBHot;
-    hotExtension.baseID = 100;
+    hotExtension.baseID = 600000000;
     SetContent(hotExtension, {4});
-    playlistConflict.packs[100] = {officialBase, hotBase};
-    playlistConflict.packs[200] = {officialExtension, hotExtension};
+    playlistConflict.packs[100] = {officialBase};
+    playlistConflict.packs[200] = {officialExtension};
+    playlistConflict.packs[600000000] = {hotBase};
+    playlistConflict.packs[600000001] = {hotExtension};
     playlistConflict.playlists.push_back(
         {"0123456789abcdef0123456789abcdef", "JBHot songs", {100, 200, 999}});
     playlistConflict.playlists.push_back({"", "Official songs", {100, 200}, bmt::DLCType::Official});
-    const auto playlistRemaps = bmt::ResolveConflicts(playlistConflict, {600000000, 600000010});
-    assert(playlistRemaps.size() == 2);
     assert(playlistConflict.playlists.front().musicIDs ==
            (std::vector<uint32_t>{600000000, 600000001, 999}));
     assert(playlistConflict.playlists.back().musicIDs == (std::vector<uint32_t>{100, 200}));
@@ -273,7 +180,7 @@ int main()
     exportPacks[catalogExtension.id].push_back(std::move(catalogExtension));
 
     bmt::ExportPacks(exportResult, output);
-    auto loaded = bmt::LoadPacks({{bmt::DLCType::Custom, output, 700000000, 700000100}},
+    auto loaded = bmt::LoadPacks({{bmt::DLCType::Custom, output}},
                                  {.mode = bmt::LoadMode::Eager,
                                   .failureMode = bmt::FailureMode::Strict});
     assert(loaded.packs.size() == 5);
@@ -308,7 +215,7 @@ int main()
     assert(std::vector<uint8_t>(decryptedCatalog.begin() + 4, decryptedCatalog.end()) ==
            ReadBytes(plaintextOutput / "mulist.plist"));
     auto plaintextLoaded = bmt::LoadPacks(
-        {{bmt::DLCType::Custom, plaintextOutput, 720000000, 720000100}},
+        {{bmt::DLCType::Custom, plaintextOutput}},
         {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
     assert(plaintextLoaded.packs.size() == 5);
     assert(plaintextLoaded.packs.at(123456789).front().format == bmt::PackFormat::Plain);
@@ -321,10 +228,63 @@ int main()
     std::filesystem::copy_file(output / "123456792.jbt", customDirectory / "123456792.jbt");
     std::filesystem::copy_file(output / "123456793.jbt", customDirectory / "123456793.jbt");
     auto customLoaded = bmt::LoadPacks(
-        {{bmt::DLCType::Custom, customDirectory, 710000000, 710000100}},
+        {{bmt::DLCType::Custom, customDirectory}},
         {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
     assert(customLoaded.packs.size() == 2);
     assert(customLoaded.packs.at(123456792).front().format == bmt::PackFormat::OfficialBF);
+
+    const auto conflictingDirectory = output / "mapping-source";
+    bmt::LoadResult conflictingExport;
+    bmt::MusicPack conflictingPack = loaded.packs.at(123456789).front();
+    conflictingPack.resources.at("seq_bas").bytes =
+        std::vector<uint8_t>{'J', 'B', 'S', 'Q', 9, 9, 9, 9};
+    conflictingPack.resources.at("seq_bas").lazyLoader = {};
+    conflictingExport.packs[123456789].push_back(std::move(conflictingPack));
+    conflictingExport.playlists.push_back(
+        {"11111111111111111111111111111111", "Mapped songs", {123456789}});
+    bmt::ExportPacks(conflictingExport, conflictingDirectory, {.encryptJBT = false});
+    bool rejectedMissingMapping = false;
+    try
+    {
+        (void)bmt::LoadPacks({
+            {bmt::DLCType::Official, output},
+            {bmt::DLCType::Custom, conflictingDirectory},
+        }, {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
+    }
+    catch (const std::runtime_error& error)
+    {
+        rejectedMissingMapping = std::string_view(error.what()).find("mapping.json") !=
+                                 std::string_view::npos;
+    }
+    assert(rejectedMissingMapping);
+
+    WriteText(conflictingDirectory / "mapping.json", "{\n  \"123456789\": 223456789\n}\n");
+    auto mappedLoaded = bmt::LoadPacks({
+        {bmt::DLCType::Official, output},
+        {bmt::DLCType::Custom, conflictingDirectory},
+    }, {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
+    assert(mappedLoaded.packs.size() == 6);
+    assert(mappedLoaded.packs.contains(123456789));
+    assert(mappedLoaded.packs.contains(223456789));
+    assert(mappedLoaded.packs.at(223456789).front().originalID == 123456789);
+    assert(mappedLoaded.packs.at(223456789).front().id == 223456789);
+    assert(mappedLoaded.remaps.size() == 1);
+    assert(mappedLoaded.remaps.front().oldID == 123456789);
+    assert(mappedLoaded.remaps.front().newID == 223456789);
+    assert(mappedLoaded.playlists.size() == 1);
+    assert(mappedLoaded.playlists.front().musicIDs == (std::vector<uint32_t>{223456789}));
+
+    const auto duplicateDirectory = output / "duplicate-source";
+    std::filesystem::create_directory(duplicateDirectory);
+    std::filesystem::copy_file(output / "123456789.jbt",
+                               duplicateDirectory / "123456789.jbt");
+    auto deduplicated = bmt::LoadPacks({
+        {bmt::DLCType::Official, output},
+        {bmt::DLCType::Custom, duplicateDirectory},
+    }, {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
+    assert(deduplicated.packs.size() == 5);
+    assert(deduplicated.droppedDuplicates == 1);
+    assert(deduplicated.packs.at(123456789).front().dlcType == bmt::DLCType::Official);
 
     bmt::ExportPacks(playlistConflict, output / "playlist-export");
     assert(std::filesystem::is_regular_file(output / "playlist-export" / "playlists.plist"));
@@ -386,22 +346,6 @@ int main()
     assert(danglingCatalog.front().id == 123456795);
     assert(danglingCatalog.front().extID == 0);
     assert(danglingCatalog.front().extURL.empty());
-
-    const auto secondCustomDirectory = output / "custom-two";
-    std::filesystem::create_directory(secondCustomDirectory);
-    bool rejectedOverlappingRanges = false;
-    try
-    {
-        (void)bmt::LoadPacks({
-            {bmt::DLCType::Custom, customDirectory, 1000, 2000},
-            {bmt::DLCType::Custom, secondCustomDirectory, 2000, 3000},
-        });
-    }
-    catch (const std::invalid_argument&)
-    {
-        rejectedOverlappingRanges = true;
-    }
-    assert(rejectedOverlappingRanges);
 
     bmt::LoadResult invalidExport;
     bmt::MusicPack invalidPack;
