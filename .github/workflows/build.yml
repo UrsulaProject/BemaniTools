@@ -1,0 +1,113 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_COMMIT: 388141d50c018f9050bd0128152f7f8ac7f248b8
+  VCPKG_DISABLE_METRICS: 1
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            triplet: x64-linux
+            artifact: BemaniTools-linux-x64
+            archive: BemaniTools-linux-x64.tar.gz
+          - runner: macos-15
+            triplet: arm64-osx
+            artifact: BemaniTools-macos-arm64
+            archive: BemaniTools-macos-arm64.tar.gz
+          - runner: windows-2022
+            triplet: x64-windows-static
+            artifact: BemaniTools-windows-x64
+            archive: BemaniTools-windows-x64.zip
+
+    steps:
+      - name: Check out BemaniTools
+        uses: actions/checkout@v4
+
+      - name: Check out vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: vcpkg
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-
+
+      - name: Create vcpkg binary cache
+        run: cmake -E make_directory "${{ env.VCPKG_DEFAULT_BINARY_CACHE }}"
+
+      - name: Bootstrap vcpkg
+        if: runner.os != 'Windows'
+        run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Bootstrap vcpkg
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install build --config Release --prefix staging
+
+      - name: Smoke test installed CLI
+        if: runner.os != 'Windows'
+        run: ./staging/bin/BemaniTools --help
+
+      - name: Smoke test installed CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\staging\bin\BemaniTools.exe --help
+
+      - name: Package artifact
+        if: runner.os != 'Windows'
+        working-directory: staging
+        run: cmake -E tar czf "../${{ matrix.archive }}" --format=gnutar .
+
+      - name: Package artifact
+        if: runner.os == 'Windows'
+        working-directory: staging
+        run: cmake -E tar cf "../${{ matrix.archive }}" --format=zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 14

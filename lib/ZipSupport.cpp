@@ -13,6 +13,12 @@ namespace fs = std::filesystem;
 
 namespace
 {
+    std::string UTF8Path(const fs::path& path)
+    {
+        const auto utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     struct ZipDeleter
     {
         void operator()(zip_t* value) const noexcept
@@ -39,7 +45,8 @@ namespace bmt::detail
     std::vector<std::string> ListZipEntries(const fs::path& path)
     {
         int error = 0;
-        ZipPtr archive(zip_open(path.c_str(), ZIP_RDONLY, &error));
+        const std::string archivePath = UTF8Path(path);
+        ZipPtr archive(zip_open(archivePath.c_str(), ZIP_RDONLY, &error));
         if (!archive)
             throw std::runtime_error("cannot open ZIP " + path.string());
         const zip_int64_t count = zip_get_num_entries(archive.get(), 0);
@@ -59,7 +66,8 @@ namespace bmt::detail
     std::vector<uint8_t> ReadZipEntry(const fs::path& path, std::string_view name)
     {
         int error = 0;
-        ZipPtr archive(zip_open(path.c_str(), ZIP_RDONLY, &error));
+        const std::string archivePath = UTF8Path(path);
+        ZipPtr archive(zip_open(archivePath.c_str(), ZIP_RDONLY, &error));
         if (!archive)
             throw std::runtime_error("cannot open ZIP " + path.string());
         const std::string memberName(name);
@@ -90,7 +98,8 @@ namespace bmt::detail
         if (!path.parent_path().empty())
             fs::create_directories(path.parent_path());
         int error = 0;
-        ZipPtr archive(zip_open(path.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &error));
+        const std::string archivePath = UTF8Path(path);
+        ZipPtr archive(zip_open(archivePath.c_str(), ZIP_CREATE | ZIP_TRUNCATE, &error));
         if (!archive)
             throw std::runtime_error("cannot create ZIP " + path.string());
         for (const auto& member : members)

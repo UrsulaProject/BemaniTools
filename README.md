@@ -5,12 +5,38 @@ Marker。核心库会自动识别明文、官方 BFCodec 和 JBHot 格式；CLI 
 
 ## 编译
 
-依赖：CMake、Boost.Program_options、libzip、libplist 2.x、OpenSSL/libcrypto、
-json-c。
+项目提供 `vcpkg.json`，推荐使用 vcpkg manifest 安装 Boost.Program_options、
+libzip、libplist 2.x、OpenSSL/libcrypto 和 json-c。首先准备 vcpkg，然后把
+toolchain 传给 CMake：
+
+```sh
+git clone https://github.com/microsoft/vcpkg.git /path/to/vcpkg
+git -C /path/to/vcpkg checkout 388141d50c018f9050bd0128152f7f8ac7f248b8
+/path/to/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
+```
+
+Windows 下将 bootstrap 命令换成 `bootstrap-vcpkg.bat`。vcpkg 会在 CMake
+配置时根据 manifest 自动安装锁定的依赖。
+
+如果系统已安装上述依赖，仍可以使用原来的 pkg-config 路径，
+无需 vcpkg：
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j4
+ctest --test-dir build --output-on-failure
+```
+
+可以把 CLI 和本文档安装到独立目录：
+
+```sh
+cmake --install build --prefix /path/to/package
 ```
 
 下文假设当前目录是 BemaniTools 仓库，程序路径为：
@@ -18,6 +44,19 @@ cmake --build build -j4
 ```text
 ./build/BemaniTools
 ```
+
+### GitHub Actions
+
+`Build` workflow 会在 push、pull request 和手动触发时使用锁定的
+vcpkg 依赖构建 Linux x64、macOS arm64 和 Windows x64，运行全部
+CTest，并上传以下 artifact：
+
+- `BemaniTools-linux-x64`
+- `BemaniTools-macos-arm64`
+- `BemaniTools-windows-x64`
+
+每个 artifact 中是一个 `.tar.gz` 或 `.zip` 安装包，CLI 位于包内
+`bin/` 目录。这些是普通 workflow 产物，不会自动创建 GitHub Release。
 
 任意路径含空格或中文时都应使用引号。程序不会清空已有输出目录；正式导出时建议
 使用空目录，以免旧文件残留。

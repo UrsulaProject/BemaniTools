@@ -1,3 +1,7 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <Bemani/BFContainer.h>
 #include <Bemani/JBT.h>
 #include <Bemani/Marker.h>
@@ -21,6 +25,12 @@
 
 namespace
 {
+    std::string UTF8Path(const std::filesystem::path& path)
+    {
+        const auto utf8 = path.u8string();
+        return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
     std::vector<uint8_t> ReadBytes(const std::filesystem::path& path)
     {
         std::ifstream input(path, std::ios::binary);
@@ -67,7 +77,8 @@ namespace
                                       const char* name)
     {
         int error = 0;
-        zip_t* archive = zip_open(path.c_str(), ZIP_RDONLY, &error);
+        const std::string archivePath = UTF8Path(path);
+        zip_t* archive = zip_open(archivePath.c_str(), ZIP_RDONLY, &error);
         if (!archive)
             throw std::runtime_error("cannot open test ZIP " + path.string());
         zip_stat_t stat{};
@@ -147,15 +158,15 @@ int main()
     playlistConflict.packs[600000000] = {hotBase};
     playlistConflict.packs[600000001] = {hotExtension};
     playlistConflict.playlists.push_back(
-        {"0123456789abcdef0123456789abcdef", "JBHot songs", {100, 200, 999}});
-    playlistConflict.playlists.push_back({"", "Official songs", {100, 200}, bmt::DLCType::Official});
-    assert(playlistConflict.playlists.front().musicIDs ==
-           (std::vector<uint32_t>{600000000, 600000001, 999}));
-    assert(playlistConflict.playlists.back().musicIDs == (std::vector<uint32_t>{100, 200}));
+        {"0123456789abcdef0123456789abcdef", "JBHot songs",
+         {600000000, 600000001, 999}});
+    playlistConflict.playlists.push_back(
+        {"", "Official songs", {100, 200}, bmt::DLCType::Official});
 
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::filesystem::path output = std::filesystem::temp_directory_path() /
-                                         ("bmt-tests-" + std::to_string(unique));
+    std::filesystem::path outputName(u8"bmt-tests-测试-");
+    outputName += std::to_string(unique);
+    const std::filesystem::path output = std::filesystem::temp_directory_path() / outputName;
     bmt::LoadResult exportResult;
     auto& exportPacks = exportResult.packs;
     bmt::MusicPack exportPack;

@@ -4,26 +4,63 @@ if(POLICY CMP0167)
 endif()
 project(BMT)
 
-find_program(PKG_CONFIG_EXECUTABLE NAMES pkg-config HINTS /opt/homebrew/bin /usr/local/bin REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip)
-pkg_check_modules(LIBPLIST REQUIRED IMPORTED_TARGET libplist-2.0)
-pkg_check_modules(LIBCRYPTO REQUIRED IMPORTED_TARGET libcrypto)
-pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 find_package(Boost REQUIRED COMPONENTS program_options)
+find_package(OpenSSL QUIET)
+find_package(libzip CONFIG QUIET)
+find_package(json-c CONFIG QUIET)
+find_package(unofficial-libplist CONFIG QUIET)
+
+if(NOT TARGET OpenSSL::Crypto OR
+   NOT TARGET libzip::zip OR
+   NOT TARGET json-c::json-c OR
+   NOT TARGET unofficial::libplist::libplist)
+    find_package(PkgConfig REQUIRED)
+endif()
+
+if(TARGET OpenSSL::Crypto)
+    set(BMT_CRYPTO_TARGET OpenSSL::Crypto)
+else()
+    pkg_check_modules(LIBCRYPTO REQUIRED IMPORTED_TARGET libcrypto)
+    set(BMT_CRYPTO_TARGET PkgConfig::LIBCRYPTO)
+endif()
+
+if(TARGET libzip::zip)
+    set(BMT_LIBZIP_TARGET libzip::zip)
+else()
+    pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip)
+    set(BMT_LIBZIP_TARGET PkgConfig::LIBZIP)
+endif()
+
+if(TARGET json-c::json-c)
+    set(BMT_JSONC_TARGET json-c::json-c)
+else()
+    pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
+    set(BMT_JSONC_TARGET PkgConfig::JSONC)
+endif()
+
+if(TARGET unofficial::libplist::libplist)
+    set(BMT_LIBPLIST_TARGET unofficial::libplist::libplist)
+else()
+    pkg_check_modules(LIBPLIST REQUIRED IMPORTED_TARGET libplist-2.0)
+    set(BMT_LIBPLIST_TARGET PkgConfig::LIBPLIST)
+endif()
 
 aux_source_directory("${CMAKE_CURRENT_LIST_DIR}/lib" BMT_LIB_SRCS)
 add_library(BMT STATIC "${BMT_LIB_SRCS}")
 target_compile_features(BMT PUBLIC cxx_std_20)
 target_include_directories(BMT PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
 target_link_libraries(BMT PUBLIC
-    PkgConfig::LIBZIP
-    PkgConfig::LIBPLIST
-    PkgConfig::LIBCRYPTO
-    PkgConfig::JSONC)
+    ${BMT_LIBZIP_TARGET}
+    ${BMT_LIBPLIST_TARGET}
+    ${BMT_CRYPTO_TARGET}
+    ${BMT_JSONC_TARGET})
 
 add_executable(BemaniTools tools/BemaniTools.cpp)
 target_link_libraries(BemaniTools PRIVATE BMT Boost::program_options)
+
+include(GNUInstallDirs)
+install(TARGETS BemaniTools RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(FILES README.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 
 include(CTest)
 if(BUILD_TESTING)

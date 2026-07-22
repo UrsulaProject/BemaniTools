@@ -233,5 +233,8 @@ __pycache__/
 *.pyc
 .idea/
 /build/
+/vcpkg/
+/vcpkg_installed/
+/.cache/
 /ios/JubeatDisplayFix/.theos/
 /ios/JubeatDisplayFix/packages/
