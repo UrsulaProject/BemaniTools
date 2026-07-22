@@ -518,8 +518,7 @@ namespace bmt
             entries.push_back({"mk" + suffix, "tm" + suffix + "_banner", pack.version});
         }
         if (options.markerListOutput)
-            WriteFile(*options.markerListOutput,
-                      EncryptMarkerList(entries, options.markerListEncoding));
+            WriteFile(*options.markerListOutput, BuildMarkerListXML(entries));
     }
 
     std::vector<MarkerListEntry> LoadMarkerListXML(const fs::path& path)

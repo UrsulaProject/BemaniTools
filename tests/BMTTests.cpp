@@ -531,22 +531,18 @@ int main()
     assert(markerLoaded.diagnostics.empty());
 
     const auto markerExport = markerRoot / "export";
-    const auto markerListRaw = markerExport / "PrefMarkerInfoList";
+    const auto markerListXML = markerExport / "marker-list.plist";
     bmt::ExportMarkers(markerLoaded, markerExport,
-        {.markerListOutput = markerListRaw,
-         .markerListEncoding = bmt::MarkerListEncoding::Raw});
+        {.markerListOutput = markerListXML});
     assert(std::filesystem::is_regular_file(markerExport / "mk0048.zip"));
     assert(HasTrailingMD5(markerExport / "mk0048.zip"));
     assert(std::filesystem::is_regular_file(markerExport / "banner" / "tm0048_banner.png"));
-    const auto markerEntries = bmt::DecryptMarkerList(markerListRaw);
+    const auto markerEntries = bmt::LoadMarkerListXML(markerListXML);
     assert(markerEntries.size() == 1);
     assert(markerEntries.front().markerID == "mk0048");
     assert(markerEntries.front().bannerName == "tm0048_banner");
     assert(markerEntries.front().version == "1.0.0");
-    const auto markerXML = bmt::BuildMarkerListXML(markerEntries);
-    const auto markerXMLPath = markerRoot / "marker-list.plist";
-    WriteBytes(markerXMLPath, markerXML);
-    assert(bmt::LoadMarkerListXML(markerXMLPath).front().markerID == "mk0048");
+    assert(bmt::LoadMarkerListXML(markerListXML).front().markerID == "mk0048");
     const auto markerListBase64 = bmt::EncryptMarkerList(
         markerEntries, bmt::MarkerListEncoding::Base64);
     const auto markerListBase64Path = markerRoot / "PrefMarkerInfoList.base64";

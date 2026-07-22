@@ -70,13 +70,18 @@ matching external banners.
   --jbhot /path/to/hot-marker \
   --custom-dir /path/to/custom-marker \
   --output /path/to/marker-output \
-  --marker-list-output /path/to/PrefMarkerInfoList \
-  --marker-list-format raw
+  --marker-list-output /path/to/marker-output/marker-list.plist
 ```
 
 Marker-list plaintext is an XML plist array containing `markerID`, `bannerName`,
-and `version`. Encryption rebuilds an Apple-compatible NSKeyedArchiver before
-applying BFCodec. Both raw NSData and Base64 encodings are supported.
+and `version`. `marker build` writes this plaintext form so an injected tweak can
+load it and pass the array directly to the game's `+[MarkerManager setMarkerList:]`.
+An integration example is provided in `ios/MarkerListLoaderExample.xm`.
+
+The standalone conversion commands remain available for inspecting or rebuilding
+an encrypted `PrefMarkerInfoList`. Both raw NSData and Base64 encodings are
+supported, but direct in-process installation is preferred because the game then
+uses its own `NSKeyedArchiver` and BFCodec implementation.
 
 ```sh
 ./build/BemaniTools marker-list decrypt \

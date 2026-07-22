@@ -280,7 +280,6 @@ namespace
         fs::path markerListOutput;
         std::vector<fs::path> custom;
         bool strict = false;
-        std::string listFormat = "raw";
         po::options_description options("marker build options");
         options.add_options()
             ("help,h", "show help")
@@ -289,8 +288,8 @@ namespace
             ("custom-dir", po::value<std::vector<fs::path>>(&custom)->composing(), "Custom marker directory; repeatable")
             ("output,o", po::value<fs::path>(&output)->required(), "output marker directory")
             ("strict", po::bool_switch(&strict), "stop at the first invalid marker")
-            ("marker-list-output", po::value<fs::path>(&markerListOutput), "encrypted marker list output path")
-            ("marker-list-format", po::value<std::string>(&listFormat)->default_value("raw"), "raw or base64");
+            ("marker-list-output", po::value<fs::path>(&markerListOutput),
+             "plain XML plist output for MarkerManager setMarkerList:");
         const auto values = Parse(arguments, options);
         if (values.count("help"))
         {
@@ -306,15 +305,11 @@ namespace
             sources.push_back({bmt::DLCType::Custom, path});
         if (sources.empty())
             throw std::runtime_error("marker build requires --official, --jbhot, or --custom-dir");
-        if (listFormat != "raw" && listFormat != "base64")
-            throw std::runtime_error("--marker-list-format must be raw or base64");
         auto result = bmt::LoadMarkers(sources,
             {.failureMode = strict ? bmt::FailureMode::Strict : bmt::FailureMode::Continue});
         bmt::MarkerExportOptions exportOptions;
         if (!markerListOutput.empty())
             exportOptions.markerListOutput = markerListOutput;
-        exportOptions.markerListEncoding = listFormat == "raw"
-            ? bmt::MarkerListEncoding::Raw : bmt::MarkerListEncoding::Base64;
         bmt::ExportMarkers(result, output, exportOptions);
         for (const auto& diagnostic : result.diagnostics)
             std::cerr << "error: " << diagnostic.path << ": " << diagnostic.message << '\n';

@@ -75,7 +75,6 @@ namespace bmt
     struct MarkerExportOptions
     {
         std::optional<std::filesystem::path> markerListOutput;
-        MarkerListEncoding markerListEncoding = MarkerListEncoding::Raw;
     };
 
     void DecryptMarker(const std::filesystem::path& inputZip,
