@@ -415,9 +415,8 @@ int RunTests()
 
     bmt::ExportPacks(playlistConflict, output / "playlist-export");
     assert(std::filesystem::is_regular_file(output / "playlist-export" / "playlists.plist"));
-    std::ifstream playlistInput(output / "playlist-export" / "playlists.plist");
-    const std::string playlistXML((std::istreambuf_iterator<char>(playlistInput)),
-                                  std::istreambuf_iterator<char>());
+    const auto playlistBytes = ReadBytes(output / "playlist-export" / "playlists.plist");
+    const std::string playlistXML(playlistBytes.begin(), playlistBytes.end());
     const auto listPosition = playlistXML.find("<key>LIST</key>");
     const auto namePosition = playlistXML.find("<key>NAME</key>");
     const auto playlistIDPosition = playlistXML.find("<key>PLID</key>");
