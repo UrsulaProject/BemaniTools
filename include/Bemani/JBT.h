@@ -81,6 +81,7 @@ namespace bmt
 
     struct MusicPack
     {
+        uint32_t sourceFileID = 0;
         uint32_t originalID = 0;
         uint32_t id = 0;
         std::filesystem::path sourcePath;

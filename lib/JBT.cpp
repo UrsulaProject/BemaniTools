@@ -878,9 +878,6 @@ namespace
                 throw std::runtime_error("mapping.json target for " + std::to_string(oldID) +
                                          " is outside the valid ID range");
             const uint32_t newID = static_cast<uint32_t>(rawTarget);
-            if (oldID == newID)
-                throw std::runtime_error("mapping.json contains an identity mapping for " +
-                                         std::to_string(oldID));
             if (!mapping.emplace(oldID, newID).second)
                 throw std::runtime_error("mapping.json contains the source ID more than once: " +
                                          std::to_string(oldID));
@@ -902,26 +899,62 @@ namespace
                         const fs::path& sourceDirectory)
     {
         std::set<uint32_t> loadedIDs;
+        IDMapping logicalMapping;
+        for (const auto& [id, instances] : sourceResult.packs)
+        {
+            for (const auto& pack : instances)
+            {
+                loadedIDs.insert(pack.sourceFileID);
+                const auto mapped = mapping.find(pack.sourceFileID);
+                if (mapped == mapping.end())
+                    continue;
+                const auto [position, inserted] = logicalMapping.emplace(pack.originalID, mapped->second);
+                if (!inserted && position->second != mapped->second)
+                    throw std::runtime_error("mapping.json assigns multiple targets to info ID " +
+                                             std::to_string(pack.originalID));
+            }
+        }
         bmt::PackTable mappedPacks;
         for (auto& [id, instances] : sourceResult.packs)
         {
-            if (instances.size() != 1)
-                throw std::runtime_error("DLC contains multiple JBT files with ID " +
-                                         std::to_string(id));
-            auto pack = std::move(instances.front());
-            loadedIDs.insert(id);
-            const uint32_t finalID = MappedID(mapping, id);
-            pack.id = finalID;
-            pack.extID = MappedID(mapping, pack.extID);
-            pack.baseID = MappedID(mapping, pack.baseID);
-            if (finalID != id)
+            for (auto& instance : instances)
             {
-                sourceResult.remaps.push_back({pack.sourcePath, id, finalID});
-                RewriteInfoID(pack);
+                auto pack = std::move(instance);
+                const uint32_t finalID = MappedID(mapping, pack.sourceFileID);
+                pack.id = finalID == pack.sourceFileID && !mapping.contains(pack.sourceFileID)
+                              ? pack.originalID
+                              : finalID;
+                pack.extID = MappedID(logicalMapping, pack.extID);
+                pack.baseID = MappedID(logicalMapping, pack.baseID);
+                if (pack.id != pack.originalID)
+                {
+                    sourceResult.remaps.push_back({pack.sourcePath, pack.originalID, pack.id});
+                    RewriteInfoID(pack);
+                }
+                mappedPacks[pack.id].push_back(std::move(pack));
             }
-            if (!mappedPacks.emplace(finalID, std::vector<bmt::MusicPack>{std::move(pack)}).second)
-                throw std::runtime_error("mapping.json causes multiple files to use ID " +
-                                         std::to_string(finalID));
+        }
+        for (auto& [id, instances] : mappedPacks)
+        {
+            if (instances.size() == 1)
+                continue;
+            auto& winner = instances.front();
+            for (size_t index = 1; index < instances.size(); ++index)
+            {
+                auto& duplicate = instances[index];
+                if (!SamePackContent(winner, duplicate))
+                {
+                    const bool wasMapped = duplicate.id != duplicate.originalID;
+                    throw std::runtime_error(
+                        wasMapped
+                            ? "mapping.json causes multiple files to use ID " + std::to_string(id)
+                            : "conflicting file " + duplicate.sourcePath.filename().string() +
+                                  " requires an entry in " +
+                                  (sourceDirectory / "mapping.json").string());
+                }
+                ++sourceResult.droppedDuplicates;
+            }
+            instances.erase(instances.begin() + 1, instances.end());
         }
         for (const auto& [oldID, newID] : mapping)
         {
@@ -933,7 +966,7 @@ namespace
         for (auto& playlist : sourceResult.playlists)
         {
             for (auto& id : playlist.musicIDs)
-                id = MappedID(mapping, id);
+                id = MappedID(logicalMapping, id);
         }
     }
 
@@ -986,50 +1019,47 @@ namespace
     {
         for (const auto& component : RelationshipComponents(sourceResult.packs))
         {
-            bool anyCollision = false;
-            bool allDuplicates = true;
             for (const uint32_t id : component)
             {
                 const auto existing = result.packs.find(id);
                 if (existing == result.packs.end())
-                {
-                    allDuplicates = false;
                     continue;
-                }
-                anyCollision = true;
                 auto& incoming = sourceResult.packs.at(id).front();
                 auto& winner = existing->second.front();
-                if (winner.extID != incoming.extID || winner.baseID != incoming.baseID ||
-                    !SamePackContent(winner, incoming))
-                    allDuplicates = false;
-            }
-            if (anyCollision && !allDuplicates)
-            {
-                const auto conflicting = std::find_if(component.begin(), component.end(),
-                    [&](uint32_t id) { return result.packs.contains(id); });
-                const uint32_t id = conflicting == component.end() ? component.front() : *conflicting;
-                const auto& pack = sourceResult.packs.at(id).front();
-                const bool wasMapped = pack.originalID != pack.id;
-                if (wasMapped)
-                    throw std::runtime_error("mapping.json target " + std::to_string(id) +
-                                             " is already occupied while loading " +
-                                             sourceDirectory.string());
-                throw std::runtime_error("conflicting ID " + std::to_string(id) + " from " +
-                                         pack.sourcePath.string() +
-                                         " requires an entry in " +
-                                         (sourceDirectory / "mapping.json").string());
-            }
-            if (anyCollision)
-            {
-                result.droppedDuplicates += component.size();
-                continue;
+                if (!SamePackContent(winner, incoming))
+                {
+                    const bool wasMapped = incoming.originalID != incoming.id;
+                    if (wasMapped)
+                        throw std::runtime_error("mapping.json target " + std::to_string(id) +
+                                                 " is already occupied while loading " +
+                                                 sourceDirectory.string());
+                    throw std::runtime_error("conflicting ID " + std::to_string(id) + " from " +
+                                             incoming.sourcePath.string() +
+                                             " requires an entry in " +
+                                             (sourceDirectory / "mapping.json").string());
+                }
             }
             for (const uint32_t id : component)
-                result.packs.emplace(id, std::move(sourceResult.packs.at(id)));
+            {
+                auto existing = result.packs.find(id);
+                if (existing == result.packs.end())
+                {
+                    result.packs.emplace(id, std::move(sourceResult.packs.at(id)));
+                    continue;
+                }
+                auto& winner = existing->second.front();
+                const auto& duplicate = sourceResult.packs.at(id).front();
+                if (!winner.extID)
+                    winner.extID = duplicate.extID;
+                if (!winner.baseID)
+                    winner.baseID = duplicate.baseID;
+                ++result.droppedDuplicates;
+            }
         }
         result.remaps.insert(result.remaps.end(),
                              std::make_move_iterator(sourceResult.remaps.begin()),
                              std::make_move_iterator(sourceResult.remaps.end()));
+        result.droppedDuplicates += sourceResult.droppedDuplicates;
         result.playlists.insert(result.playlists.end(),
                                 std::make_move_iterator(sourceResult.playlists.begin()),
                                 std::make_move_iterator(sourceResult.playlists.end()));
@@ -1568,10 +1598,7 @@ namespace bmt
                 {
                     auto pack = LoadOnePack(path, options, musicData);
                     const uint32_t fileID = ParseMappingID(path.stem().string(), "JBT filename ID");
-                    if (fileID != pack.originalID)
-                        throw std::runtime_error("JBT filename ID " + std::to_string(fileID) +
-                                                 " does not match info ID " +
-                                                 std::to_string(pack.originalID));
+                    pack.sourceFileID = fileID;
                     pack.dlcType = source.type;
                     pack.dlcOrder = sourceIndex;
                     sourceResult.packs[pack.id].push_back(std::move(pack));

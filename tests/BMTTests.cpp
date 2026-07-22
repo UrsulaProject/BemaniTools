@@ -324,13 +324,26 @@ int main()
     std::filesystem::create_directory(duplicateDirectory);
     std::filesystem::copy_file(output / "123456789.jbt",
                                duplicateDirectory / "123456789.jbt");
+    std::filesystem::copy_file(output / "123456789.jbt",
+                               duplicateDirectory / "323456789.jbt");
     auto deduplicated = bmt::LoadPacks({
         {bmt::DLCType::Official, output},
         {bmt::DLCType::Custom, duplicateDirectory},
     }, {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
     assert(deduplicated.packs.size() == 5);
-    assert(deduplicated.droppedDuplicates == 1);
+    assert(deduplicated.droppedDuplicates == 2);
     assert(deduplicated.packs.at(123456789).front().dlcType == bmt::DLCType::Official);
+
+    WriteText(duplicateDirectory / "mapping.json", "{\n  \"323456789\": 323456780\n}\n");
+    auto fileIDMapped = bmt::LoadPacks(
+        {{bmt::DLCType::Custom, duplicateDirectory}},
+        {.mode = bmt::LoadMode::Eager, .failureMode = bmt::FailureMode::Strict});
+    assert(fileIDMapped.packs.size() == 2);
+    assert(fileIDMapped.packs.contains(123456789));
+    assert(fileIDMapped.packs.contains(323456780));
+    assert(fileIDMapped.packs.at(123456789).front().sourceFileID == 123456789);
+    assert(fileIDMapped.packs.at(323456780).front().sourceFileID == 323456789);
+    assert(fileIDMapped.packs.at(323456780).front().originalID == 123456789);
 
     bmt::ExportPacks(playlistConflict, output / "playlist-export");
     assert(std::filesystem::is_regular_file(output / "playlist-export" / "playlists.plist"));

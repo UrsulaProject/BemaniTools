@@ -103,10 +103,11 @@ different pack already loaded, its directory must contain a `mapping.json` objec
 
 Keys are IDs from the JBT filenames and values are the final IDs. Mappings are
 always applied, including to JBT `info`, base/ext relationships, and playlists, so
-the result is stable when a DLC is loaded by itself. Stale keys, duplicate targets,
-identity mappings, filename/info mismatches, missing mappings, and occupied mapping
-targets are rejected. Related base/ext packs are merged atomically. Decrypted JBT
-members are compared byte-for-byte; a later identical relationship component is
+the result is stable when a DLC is loaded by itself. Missing mappings, stale keys,
+duplicate targets, and occupied mapping targets are rejected. Filename IDs and
+`info.ID` are tracked separately because real JBHot archives do not always make
+them equal. Related base/ext packs are merged atomically. Decrypted JBT members are
+compared byte-for-byte; a later identical relationship component is
 dropped, so CLI priority is Official, JBHot, then Custom command-line order. No IDs
 are generated automatically.
 
