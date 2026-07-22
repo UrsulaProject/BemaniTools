@@ -1,5 +1,6 @@
 #include <Bemani/BFContainer.h>
 #include <Bemani/JBT.h>
+#include <Bemani/Marker.h>
 
 #include <openssl/evp.h>
 
@@ -29,10 +30,21 @@ namespace
 
     void WriteText(const std::filesystem::path& path, std::string_view text)
     {
+        std::filesystem::create_directories(path.parent_path());
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         if (!output)
             throw std::runtime_error("cannot create test file " + path.string());
         output.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!output)
+            throw std::runtime_error("cannot write test file " + path.string());
+    }
+
+    void WriteBytes(const std::filesystem::path& path, const std::vector<uint8_t>& bytes)
+    {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
         if (!output)
             throw std::runtime_error("cannot write test file " + path.string());
     }
@@ -429,6 +441,101 @@ int main()
     }
     assert(rejectedInvalidExport);
     assert(!std::filesystem::exists(output / "invalid-export"));
+
+    const auto mulistPlainPath = output / "list-crypto" / "mulist.plist";
+    const std::string minimalList =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<plist version=\"1.0\"><array/></plist>";
+    WriteText(mulistPlainPath, minimalList);
+    const auto encryptedList = bmt::EncryptOfficialMusicList(mulistPlainPath, "SHARED_KEY");
+    const auto encryptedListPath = output / "list-crypto" / "mulist";
+    WriteBytes(encryptedListPath, encryptedList);
+    assert(bmt::DecryptOfficialMusicList(encryptedListPath, "SHARED_KEY") ==
+           ReadBytes(mulistPlainPath));
+
+    const std::vector<uint8_t> tinyPNG = {
+        0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4
+    };
+    const auto markerRoot = output / "markers";
+    const auto markerExpanded = markerRoot / "expanded" / "mk0048";
+    WriteBytes(markerExpanded / "h100", tinyPNG);
+    WriteBytes(markerExpanded / "ma00", tinyPNG);
+    const auto markerOfficial = markerRoot / "official";
+    bmt::PackMarker(markerExpanded, markerOfficial / "mk0048.zip");
+    const auto markerUnpacked = markerRoot / "unpacked";
+    bmt::UnpackMarker(markerOfficial / "mk0048.zip", markerUnpacked);
+    assert(ReadBytes(markerUnpacked / "h100") == tinyPNG);
+    assert(ReadBytes(markerUnpacked / "ma00") == tinyPNG);
+    const auto markerPlainZip = markerRoot / "mk0048-plain.zip";
+    bmt::DecryptMarker(markerOfficial / "mk0048.zip", markerPlainZip);
+    const auto markerReencrypted = markerRoot / "mk0048-reencrypted.zip";
+    bmt::EncryptMarker(markerPlainZip, markerReencrypted);
+    bmt::UnpackMarker(markerReencrypted, markerRoot / "reencrypted-unpacked");
+    assert(ReadBytes(markerRoot / "reencrypted-unpacked" / "h100") == tinyPNG);
+
+    auto missingBanner = bmt::LoadMarkers({{bmt::DLCType::Official, markerOfficial}});
+    assert(missingBanner.packs.size() == 1);
+    assert(missingBanner.diagnostics.size() == 1);
+    WriteBytes(markerOfficial / "banner" / "tm0048_banner.png", tinyPNG);
+    auto markerLoaded = bmt::LoadMarkers(
+        {{bmt::DLCType::Official, markerOfficial}},
+        {.failureMode = bmt::FailureMode::Strict});
+    assert(markerLoaded.packs.size() == 1);
+    assert(markerLoaded.diagnostics.empty());
+
+    const auto markerExport = markerRoot / "export";
+    const auto markerListRaw = markerExport / "PrefMarkerInfoList";
+    bmt::ExportMarkers(markerLoaded, markerExport,
+        {.markerListOutput = markerListRaw,
+         .markerListEncoding = bmt::MarkerListEncoding::Raw});
+    assert(std::filesystem::is_regular_file(markerExport / "mk0048.zip"));
+    assert(std::filesystem::is_regular_file(markerExport / "banner" / "tm0048_banner.png"));
+    const auto markerEntries = bmt::DecryptMarkerList(markerListRaw);
+    assert(markerEntries.size() == 1);
+    assert(markerEntries.front().markerID == "mk0048");
+    assert(markerEntries.front().bannerName == "tm0048_banner");
+    assert(markerEntries.front().version == "1.0.0");
+    const auto markerXML = bmt::BuildMarkerListXML(markerEntries);
+    const auto markerXMLPath = markerRoot / "marker-list.plist";
+    WriteBytes(markerXMLPath, markerXML);
+    assert(bmt::LoadMarkerListXML(markerXMLPath).front().markerID == "mk0048");
+    const auto markerListBase64 = bmt::EncryptMarkerList(
+        markerEntries, bmt::MarkerListEncoding::Base64);
+    const auto markerListBase64Path = markerRoot / "PrefMarkerInfoList.base64";
+    WriteBytes(markerListBase64Path, markerListBase64);
+    assert(bmt::DecryptMarkerList(markerListBase64Path).front().markerID == "mk0048");
+
+    const auto duplicateMarkers = markerRoot / "duplicates";
+    std::filesystem::create_directories(duplicateMarkers / "banner");
+    std::filesystem::copy_file(markerOfficial / "mk0048.zip", duplicateMarkers / "mk0048.zip");
+    std::filesystem::copy_file(markerOfficial / "banner" / "tm0048_banner.png",
+                               duplicateMarkers / "banner" / "tm0048_banner.png");
+    auto deduplicatedMarkers = bmt::LoadMarkers({
+        {bmt::DLCType::Official, markerOfficial},
+        {bmt::DLCType::Custom, duplicateMarkers},
+    });
+    assert(deduplicatedMarkers.packs.size() == 1);
+    assert(deduplicatedMarkers.droppedDuplicates == 1);
+
+    const auto conflictingMarkers = markerRoot / "conflicting";
+    const auto conflictingExpanded = markerRoot / "conflicting-expanded";
+    auto differentPNG = tinyPNG;
+    differentPNG.back() = 9;
+    WriteBytes(conflictingExpanded / "h100", differentPNG);
+    bmt::PackMarker(conflictingExpanded, conflictingMarkers / "mk0048.zip");
+    WriteBytes(conflictingMarkers / "banner" / "tm0048_banner.png", differentPNG);
+    WriteText(conflictingMarkers / "mapping.json", "{\"48\":49}\n");
+    auto remappedMarkers = bmt::LoadMarkers({
+        {bmt::DLCType::Official, markerOfficial},
+        {bmt::DLCType::Custom, conflictingMarkers},
+    }, {.failureMode = bmt::FailureMode::Strict});
+    assert(remappedMarkers.packs.size() == 2);
+    assert(remappedMarkers.packs.contains(48));
+    assert(remappedMarkers.packs.contains(49));
+    assert(remappedMarkers.remaps.size() == 1);
+    assert(remappedMarkers.remaps.front().oldID == 48);
+    assert(remappedMarkers.remaps.front().newID == 49);
+
     std::filesystem::remove_all(output);
 
     std::cout << "BMTTests passed\n";

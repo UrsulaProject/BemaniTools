@@ -1478,34 +1478,10 @@ namespace bmt
     }
 
     std::vector<uint8_t> DecryptOfficialMusicList(const fs::path& encryptedPath,
-                                                  const fs::path& keychainDump,
-                                                  std::string_view bundleID)
+                                                  std::string_view key)
     {
-        auto keychain = ParsePlist(ReadFile(keychainDump));
-        plist_t genericPasswords = plist_dict_get_item(keychain.get(), "genp");
-        if (!genericPasswords || plist_get_node_type(genericPasswords) != PLIST_ARRAY)
-            throw std::runtime_error("keychain dump has no genp array");
-        std::string key;
-        const uint32_t count = plist_array_get_size(genericPasswords);
-        for (uint32_t index = 0; index < count; ++index)
-        {
-            plist_t item = plist_array_get_item(genericPasswords, index);
-            if (PlistString(item, "acct") != "ApplicationUniqueID" ||
-                PlistString(item, "svce") != bundleID)
-                continue;
-            plist_t value = plist_dict_get_item(item, "v_Data");
-            if (!value || plist_get_node_type(value) != PLIST_DATA)
-                continue;
-            char* bytes = nullptr;
-            uint64_t length = 0;
-            plist_get_data_val(value, &bytes, &length);
-            key.assign(bytes, bytes + length);
-            if (bytes)
-                plist_mem_free(bytes);
-            break;
-        }
         if (key.empty())
-            throw std::runtime_error("ApplicationUniqueID was not found in the keychain dump");
+            throw std::runtime_error("mulist key must not be empty");
         auto plaintext = DecryptBFContainer(ReadFile(encryptedPath), key);
         if (plaintext.size() < 4)
             throw std::runtime_error("decrypted mulist is missing its four-byte prefix");
@@ -1514,6 +1490,71 @@ namespace bmt
         if (plist_get_node_type(validation.get()) != PLIST_ARRAY)
             throw std::runtime_error("decrypted mulist is not a plist array");
         return plaintext;
+    }
+
+    std::vector<uint8_t> EncryptOfficialMusicList(const fs::path& plaintextPath,
+                                                  std::string_view key)
+    {
+        if (key.empty())
+            throw std::runtime_error("mulist key must not be empty");
+        const auto plaintext = ReadFile(plaintextPath);
+        auto validation = ParsePlist(plaintext);
+        if (plist_get_node_type(validation.get()) != PLIST_ARRAY)
+            throw std::runtime_error("mulist plaintext is not a plist array");
+        std::vector<uint8_t> prefixed(4);
+        if (RAND_bytes(prefixed.data(), static_cast<int>(prefixed.size())) != 1)
+            throw std::runtime_error("cannot generate mulist prefix");
+        prefixed.insert(prefixed.end(), plaintext.begin(), plaintext.end());
+        return EncryptBFContainer(prefixed, key);
+    }
+
+    std::map<std::string, std::string> DumpJBHotDefaults(const fs::path& defaultsPlist)
+    {
+        static constexpr std::array<std::pair<std::string_view, std::string_view>, 5> Keys = {{
+            {"userData", "fh1dghh4dfg87dfg"},
+            {"serverData", "gh4hh5gh46555fgh"},
+            {"musicData", "dbfzr5KWvVVAA7FP"},
+            {"offlineData", "efg4df21gvb4dfv4"},
+            {"scoreData", "fdg2df1gh32er1tg"},
+        }};
+        auto plist = ParsePlist(ReadFile(defaultsPlist));
+        std::map<std::string, std::string> output;
+        for (const auto& [name, key] : Keys)
+        {
+            const std::string encoded = PlistString(plist.get(), std::string(name).c_str());
+            if (encoded.empty())
+                continue;
+            auto json = ParseJson(DecryptDefaultValue(encoded, key));
+            output.emplace(name, json_object_to_json_string_ext(json.get(), JSON_C_TO_STRING_PRETTY));
+        }
+
+        JsonPtr details(json_object_new_object());
+        JsonPtr data(json_object_new_object());
+        uint32_t version = 0;
+        for (uint32_t index = 1; ; ++index)
+        {
+            const std::string storageKey = "musicDetail" + std::to_string(index);
+            const std::string encoded = PlistString(plist.get(), storageKey.c_str());
+            if (encoded.empty())
+                break;
+            auto json = ParseJson(DecryptDefaultValue(encoded, "dbfzr5KWvVVAA7FP"));
+            json_object* chunk = nullptr;
+            if (json_object_object_get_ex(json.get(), "data", &chunk) &&
+                json_object_get_type(chunk) == json_type_object)
+            {
+                json_object_object_foreach(chunk, key, value)
+                    json_object_object_add(data.get(), key, json_object_get(value));
+            }
+            version = index;
+        }
+        if (version)
+        {
+            json_object_object_add(details.get(), "version", json_object_new_int64(version));
+            json_object_object_add(details.get(), "data", data.release());
+            output.emplace("musicDetail",
+                           json_object_to_json_string_ext(details.get(), JSON_C_TO_STRING_PRETTY));
+        }
+        return output;
     }
 
     LoadResult LoadPacks(const std::vector<DLCSource>& sources, const LoadOptions& options)

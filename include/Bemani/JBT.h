@@ -194,8 +194,11 @@ namespace bmt
 
     std::vector<CatalogEntry> LoadOfficialCatalog(const std::filesystem::path& plistPath);
     std::vector<uint8_t> DecryptOfficialMusicList(const std::filesystem::path& encryptedPath,
-                                                  const std::filesystem::path& keychainDump,
-                                                  std::string_view bundleID = "jp.konami.jubeatplus");
+                                                  std::string_view key);
+    std::vector<uint8_t> EncryptOfficialMusicList(const std::filesystem::path& plaintextPath,
+                                                  std::string_view key);
+    std::map<std::string, std::string> DumpJBHotDefaults(
+        const std::filesystem::path& defaultsPlist);
 }
 
 #endif
